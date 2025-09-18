@@ -22,7 +22,7 @@ from tqdm import tqdm
 import sys
 
 # Import the preprocessing pipeline
-from adhd_preprocessing_pipeline import PreprocessingPipeline
+from preprocessing.preprocessing import PreprocessingPipeline
 
 DEFAULT_OUTPUT_SUBDIR = "preproc_outputs"
 MANIFEST_FILENAME = "preprocessing_manifest.csv"
