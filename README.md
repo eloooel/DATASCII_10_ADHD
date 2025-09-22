@@ -23,3 +23,8 @@ Run full pipeline (all stages):
 python main.py --stage full
 
 =========================================================================================
+
+Instructions for downloading dependencies:
+
+1. Input in the terminal
+   pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu121 -f https://data.pyg.org/whl/torch-2.1.0+cu121.html

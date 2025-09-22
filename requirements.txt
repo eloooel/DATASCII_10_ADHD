@@ -1,20 +1,23 @@
-numpy==1.25.2
-pandas==2.1.1
-scipy==1.11.1
+# PyTorch core and related packages with CUDA 12.1
+torch==2.1.0+cu121
+torchvision==0.16.0+cu121
+torchaudio==2.1.0+cu121
+
+# PyTorch Geometric and related packages
+torch-scatter
+torch-sparse
+torch-cluster
+torch-spline-conv
+torch-geometric
+
+# Other dependencies
 nibabel==5.1.0
 nilearn==0.10.2
 pyyaml==6.0
 tqdm==4.66.1
 scikit-learn==1.3.1
-
-# PyTorch
-torch==2.2.0
-torchvision==0.17.0
-torchaudio==2.2.0
-
-# PyTorch Geometric
-torch-geometric==2.4.0
-torch-scatter==2.1.2
-torch-sparse==0.7.7
-torch-cluster==1.6.0
-torch-spline-conv==1.2.1
+pandas==2.1.1
+numpy==1.25.2
+scipy==1.11.1
+matplotlib==3.7.1
+seaborn==0.13.2

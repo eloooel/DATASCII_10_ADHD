@@ -2,7 +2,7 @@
 Main script to run ADHD GNN-STAN pipeline
 - Supports staged execution (preprocessing → feature extraction → training)
 """
-
+import sys
 import argparse
 import torch
 from pathlib import Path
@@ -16,7 +16,8 @@ from evaluation import ADHDModelEvaluator
 def run_preprocessing(metadata_out: Path, preproc_out: Path):
     print("\nRunning Preprocessing...")
     subprocess.run([
-        "python", "-m", "preprocessing.preprocess",
+        sys.executable,
+        "-m", "preprocessing.preprocess",
         "--metadata", str(metadata_out),
         "--out-dir", str(preproc_out)
     ], check=True)
@@ -25,7 +26,8 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path):
 def run_feature_extraction(preproc_out: Path, features_out: Path):
     print("\nRunning Feature Extraction...")
     subprocess.run([
-        "python", "-m", "feature_extraction.parcellation_and_feature_extraction",
+        sys.executable,  # this ensures the same Python running main.py is used
+        "-m", "feature_extraction.parcellation_and_feature_extraction",
         "--preproc-dir", str(preproc_out),
         "--atlas", "schaefer200",
         "--out-dir", str(features_out)
