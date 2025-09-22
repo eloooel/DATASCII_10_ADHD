@@ -44,6 +44,9 @@ Thumbs.db
 *.nii.gz
 data/*/
 !data/*/README.md
+__pycache__
+data/raw/
+
 
 # Outputs
 outputs/*/
