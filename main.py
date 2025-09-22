@@ -8,22 +8,22 @@ import torch
 from pathlib import Path
 import subprocess
 
-from utils import ADHDDataLoader
+from utils import DataDiscovery
 from models import GNNSTANHybrid
-from evaluation import Evaluator
+from evaluation import ADHDModelEvaluator
 
 
 def run_preprocessing(metadata_out: Path, preproc_out: Path):
-    print(">>> Running Preprocessing...")
+    print("\nRunning Preprocessing...")
     subprocess.run([
-        "python", "-m", "preprocessing.adhd_preprocessing_pipeline",
+        "python", "-m", "preprocessing.preprocess",
         "--metadata", str(metadata_out),
         "--out-dir", str(preproc_out)
     ], check=True)
 
 
 def run_feature_extraction(preproc_out: Path, features_out: Path):
-    print(">>> Running Feature Extraction...")
+    print("\nRunning Feature Extraction...")
     subprocess.run([
         "python", "-m", "feature_extraction.parcellation_and_feature_extraction",
         "--preproc-dir", str(preproc_out),
@@ -33,8 +33,8 @@ def run_feature_extraction(preproc_out: Path, features_out: Path):
 
 
 def run_training(feature_manifest: Path, demographics: Path, model_config: dict, pretrained_weights: Path = None):
-    print(">>> Loading data for training...")
-    data_loader = ADHDDataLoader(feature_manifest, demographics)
+    print("\nLoading data for training...")
+    data_loader = DataDiscovery(feature_manifest, demographics)
     data = data_loader.load_data_for_training()
 
     fc_matrices = data['fc_matrices']
@@ -50,7 +50,7 @@ def run_training(feature_manifest: Path, demographics: Path, model_config: dict,
         model.load_state_dict(torch.load(pretrained_weights, map_location=device))
 
     # Evaluate
-    evaluator = Evaluator(model, device=device)
+    evaluator = ADHDModelEvaluator(model, device=device)
     metrics = evaluator.evaluate(fc_matrices, roi_timeseries, labels, sites)
 
     print("\nEvaluation Metrics:")

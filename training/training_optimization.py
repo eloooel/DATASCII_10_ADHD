@@ -26,8 +26,7 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from ..models import GNNSTANHybrid
-
+from models import GNNSTANHybrid
 
 class ADHDDataset(Dataset):
     """Dataset class for ADHD rs-fMRI data"""

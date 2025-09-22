@@ -15,7 +15,7 @@ from typing import Dict, Any
 
 from .gnn import EnhancedGNNBranch
 from .stan import EnhancedSTANBranch
-from .fusion import CrossModalFusion
+from .fusion_layer import CrossModalFusion
 
 
 class GNNSTANHybrid(nn.Module):

@@ -3,6 +3,6 @@ Input module for ADHD preprocessing pipeline
 - Handles rs-fMRI data discovery and metadata management
 """
 
-from .data_loader import ADHDDataLoader
+from .data_loader import DataDiscovery
 
-__all__ = ["ADHDDataLoader"]
+__all__ = ["DataDiscovery"]
