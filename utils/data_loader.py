@@ -12,7 +12,6 @@ import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-
 class DataDiscovery:
     """Handles discovery and organization of rs-fMRI data from hierarchical structure"""
 

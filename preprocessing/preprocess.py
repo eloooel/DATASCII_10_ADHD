@@ -1,5 +1,7 @@
 import numpy as np
 import nibabel as nib
+import argparse
+import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tqdm import tqdm
@@ -625,3 +627,74 @@ class PreprocessingPipeline:
             'warning_steps': warnings,
             'completion_rate': (success / total * 100) if total > 0 else 0
         }
+        
+def run_batch_cli():
+    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
+    parser.add_argument("--metadata", type=str, required=True,
+                        help="CSV file with columns: subject_id, input_path")
+    parser.add_argument("--out-dir", type=str, required=True,
+                        help="Directory to store preprocessed outputs")
+    args = parser.parse_args()
+
+    metadata = pd.read_csv(args.metadata)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pipeline = PreprocessingPipeline()
+
+    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
+
+    # Wrap loop in tqdm progress bar
+    for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Preprocessing subjects"):
+        subject_id = row["subject_id"]
+        func_path = row["input_path"]
+
+        print(f"\nProcessing subject {subject_id} from {func_path}...")
+        result = pipeline.process(func_path, subject_id)
+
+        subj_out = out_dir / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+
+        if result["status"] == "success":
+            # Save outputs as .npy
+            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+            np.save(subj_out / "mask.npy", result["brain_mask"])
+            np.save(subj_out / "confounds.npy", result["confound_regressors"])
+            print(f"✅ Completed {subject_id}")
+        else:
+            print(f"Failed {subject_id}: {result['error']}")
+
+    print("\n🎉 Preprocessing finished for all subjects.")
+    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
+    parser.add_argument("--metadata", type=str, required=True,
+                        help="CSV file with columns: subject_id, func_path")
+    parser.add_argument("--out-dir", type=str, required=True,
+                        help="Directory to store preprocessed outputs")
+
+    args = parser.parse_args()
+    metadata = pd.read_csv(args.metadata)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pipeline = PreprocessingPipeline()
+
+    for _, row in metadata.iterrows():
+        subject_id = row["subject_id"]
+        func_path = row["input_path"]
+
+        print(f"\n Preprocessing subject {subject_id} from {func_path}...")
+        result = pipeline.process(func_path, subject_id)
+
+        subj_out = out_dir / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+
+        if result["status"] == "success":
+            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+            np.save(subj_out / "mask.npy", result["brain_mask"])
+            np.save(subj_out / "confounds.npy", result["confounds"])
+            print(f"✅ Completed {subject_id}")
+        else:
+            print(f"Failed {subject_id}: {result['error']}")
+
+if __name__ == "__main__":
+    run_batch_cli()
