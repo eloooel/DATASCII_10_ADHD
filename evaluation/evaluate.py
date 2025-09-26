@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional
 import logging
 
 from models.gnn_stan_hybrid import GNNSTANHybrid
-from training.training_optimization import ADHDDataset
+from training.dataset import ADHDDataset
 
 class ADHDModelEvaluator:
     """Evaluator for GNN-STAN ADHD model"""

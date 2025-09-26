@@ -2,8 +2,8 @@ import numpy as np
 import nibabel as nib
 import argparse
 import pandas as pd
-from utils.parallel_runner import run_parallel
 
+from utils import run_parallel
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from tqdm import tqdm
@@ -11,7 +11,6 @@ from scipy import signal, ndimage
 from scipy.stats import pearsonr
 from sklearn.decomposition import PCA, FastICA
 import warnings
-from utils.parallel_runner import run_parallel
 
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
@@ -310,21 +309,28 @@ class PreprocessingPipeline:
         for z in range(n_slices):
             slice_data = img_data[:, :, z, :]
             
-            # Time shift for this slice
             time_shift = slice_times[z] - ref_time
             shifted_times = original_times + time_shift
             
-            # Interpolate each voxel's time series
             for x in range(slice_data.shape[0]):
                 for y in range(slice_data.shape[1]):
-                    voxel_ts = slice_data[x, y, :]
-                    if np.any(voxel_ts > 0):  # Skip background voxels
-                        # Linear interpolation
-                        corrected_ts = np.interp(original_times, shifted_times, voxel_ts)
-                        corrected_data[x, y, z, :] = corrected_ts
-                    else:
+                    # Ensure numeric array
+                    voxel_ts = np.asarray(slice_data[x, y, :], dtype=np.float32)
+                    
+                    # Skip empty voxels safely
+                    if voxel_ts.size == 0:
                         corrected_data[x, y, z, :] = voxel_ts
+                        continue
 
+                    # Skip zero-background voxels
+                    if not np.any(voxel_ts > 0):
+                        corrected_data[x, y, z, :] = voxel_ts
+                        continue
+
+                    # Linear interpolation
+                    corrected_ts = np.interp(original_times, shifted_times, voxel_ts)
+                    corrected_data[x, y, z, :] = corrected_ts
+                    
         # Create corrected nibabel image
         corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
         
@@ -633,6 +639,51 @@ class PreprocessingPipeline:
         }
         
 def run_batch_cli():
+    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
+    parser.add_argument("--metadata", type=str, required=True,
+                        help="CSV file with columns: subject_id, input_path")
+    parser.add_argument("--out-dir", type=str, required=True,
+                        help="Directory to store preprocessed outputs")
+    parser.add_argument("--workers", type=int, default=None,
+                        help="Number of parallel workers (default = all cores)")
+    args = parser.parse_args()
+
+    metadata = pd.read_csv(args.metadata)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pipeline = PreprocessingPipeline()
+
+    def worker(row):
+        subject_id = row["subject_id"]
+        func_path = row["input_path"]
+
+        result = pipeline.process(func_path, subject_id)
+
+        subj_out = out_dir / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+
+        if result["status"] == "success":
+            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+            np.save(subj_out / "mask.npy", result["brain_mask"])
+            np.save(subj_out / "confounds.npy", result["confound_regressors"])
+            return {"status": "success", "subject_id": subject_id}
+        else:
+            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
+
+    # Run parallel with progress bar
+    print(f"\nStarting parallel preprocessing for {len(metadata)} subjects...\n")
+    results = run_parallel(
+        tasks=[row for _, row in metadata.iterrows()],
+        worker_fn=worker,
+        max_workers=args.workers,
+        desc="Preprocessing subjects"
+    )
+
+    # Summary
+    success = sum(1 for r in results if r["status"] == "success")
+    failed = len(results) - success
+    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
     parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
     parser.add_argument("--metadata", type=str, required=True,
                         help="CSV file with columns: subject_id, input_path")

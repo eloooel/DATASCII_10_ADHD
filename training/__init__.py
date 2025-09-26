@@ -1,4 +1,4 @@
-from .training_optimization import TrainingOptimizationModule
+from .train import TrainingOptimizationModule
 
 __all__ = [
     "TrainingOptimizationModule"

@@ -18,7 +18,7 @@ from feature_extraction import SchaeferParcellation, run_feature_extraction_stag
 from utils import run_parallel
 from utils import DataDiscovery
 from models import GNNSTANHybrid
-from training.training_optimization import TrainingOptimizationModule
+from training import TrainingOptimizationModule
 from evaluation import ADHDModelEvaluator
 
 # --- Configuration ---
@@ -60,11 +60,51 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
 
 
 def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True):
+    metadata = pd.read_csv(metadata_out)
+    preproc_out.mkdir(parents=True, exist_ok=True)
+
+    pipeline = PreprocessingPipeline()
+
+    def worker(row):
+        subject_id = row["subject_id"]
+        func_path = row["input_path"]
+        result = pipeline.process(func_path, subject_id)
+
+        subj_out = preproc_out / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+
+        if result["status"] == "success":
+            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+            np.save(subj_out / "mask.npy", result["brain_mask"])
+            np.save(subj_out / "confounds.npy", result["confound_regressors"])
+            return {"status": "success", "subject_id": subject_id}
+        else:
+            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
+
+    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
+
+    if parallel:
+        results = run_parallel(
+            tasks=[row for _, row in metadata.iterrows()],
+            worker_fn=worker,
+            max_workers=None,
+            desc="Preprocessing subjects"
+        )
+    else:
+        results = [worker(row) for _, row in metadata.iterrows()]
+
+    # Summary
+    success = sum(1 for r in results if r["status"] == "success")
+    failed = len(results) - success
+    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
+    return results
     """
     Run preprocessing for all subjects listed in metadata CSV.
     - Uses subject-level parallel execution if `parallel=True`.
     - Saves outputs per subject in preproc_out/<subject_id>/
     """
+
+    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
 
     # Load metadata
     metadata = pd.read_csv(metadata_out)
@@ -108,6 +148,7 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
             results.append(worker(row))
 
     # Summary
+    
     success = sum(1 for r in results if r["status"] == "success")
     failed = len(results) - success
     print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
