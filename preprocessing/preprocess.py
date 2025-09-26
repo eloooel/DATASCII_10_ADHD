@@ -655,21 +655,24 @@ def run_batch_cli():
     pipeline = PreprocessingPipeline()
 
     def worker(row):
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
+        try:
+            subject_id = row["subject_id"]
+            func_path = row["input_path"]
+            result = pipeline.process(func_path, subject_id)
 
-        result = pipeline.process(func_path, subject_id)
+            subj_out = out_dir / subject_id
+            subj_out.mkdir(parents=True, exist_ok=True)
 
-        subj_out = out_dir / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
+            if result["status"] == "success":
+                np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+                np.save(subj_out / "mask.npy", result["brain_mask"])
+                np.save(subj_out / "confounds.npy", result["confound_regressors"])
+                return {"status": "success", "subject_id": subject_id}
+            else:
+                return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
+        except Exception as e:
+            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), "error": str(e)}
 
-        if result["status"] == "success":
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confound_regressors"])
-            return {"status": "success", "subject_id": subject_id}
-        else:
-            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
 
     # Run parallel with progress bar
     print(f"\nStarting parallel preprocessing for {len(metadata)} subjects...\n")
