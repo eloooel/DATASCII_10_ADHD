@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 
-from data_loader.data_loader import ADHDDataLoader
+from data_loader import ADHDDataLoader
 from models.gnn_stan_hybrid import GNNSTANHybrid
 from validation.loso import LeaveOneSiteOutValidator
 from validation.kfold import StratifiedKFoldValidator, KFoldValidator
-from validation.nested_cv import NestedCrossValidator
+from validation import NestedCrossValidator
 
 class ADHDPipeline:
     """Unified ADHD Classification Pipeline"""

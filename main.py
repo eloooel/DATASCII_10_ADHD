@@ -10,6 +10,12 @@ from pathlib import Path
 import subprocess
 import torch
 
+import pandas as pd
+import numpy as np
+from preprocessing import PreprocessingPipeline
+
+from feature_extraction import SchaeferParcellation, run_feature_extraction_stage
+from utils import run_parallel
 from utils import DataDiscovery
 from models import GNNSTANHybrid
 from training.training_optimization import TrainingOptimizationModule
@@ -53,14 +59,60 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
         print(f"Found existing metadata CSV at {metadata_out}")
 
 
-def run_preprocessing(metadata_out: Path, preproc_out: Path):
-    print("\nRunning Preprocessing...")
-    subprocess.run([
-        sys.executable,
-        "-m", "preprocessing.preprocess",
-        "--metadata", str(metadata_out),
-        "--out-dir", str(preproc_out)
-    ], check=True)
+def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True):
+    """
+    Run preprocessing for all subjects listed in metadata CSV.
+    - Uses subject-level parallel execution if `parallel=True`.
+    - Saves outputs per subject in preproc_out/<subject_id>/
+    """
+
+    # Load metadata
+    metadata = pd.read_csv(metadata_out)
+    preproc_out.mkdir(parents=True, exist_ok=True)
+
+    # Initialize preprocessing pipeline
+    pipeline = PreprocessingPipeline()
+
+    # Define worker function for a single subject
+    def worker(row):
+        subject_id = row["subject_id"]
+        func_path = row["input_path"]
+
+        # Run full preprocessing pipeline for this subject
+        result = pipeline.process(func_path, subject_id)
+
+        # Create output directory per subject
+        subj_out = preproc_out / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+
+        # Save outputs if successful
+        if result["status"] == "success":
+            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+            np.save(subj_out / "mask.npy", result["brain_mask"])
+            np.save(subj_out / "confounds.npy", result["confound_regressors"])
+            return {"status": "success", "subject_id": subject_id}
+        else:
+            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
+
+    # Run in parallel or sequentially
+    if parallel:
+        results = run_parallel(
+            tasks=[row for _, row in metadata.iterrows()],
+            worker_fn=worker,
+            max_workers=None,
+            desc="Preprocessing subjects"
+        )
+    else:
+        results = []
+        for _, row in metadata.iterrows():
+            results.append(worker(row))
+
+    # Summary
+    success = sum(1 for r in results if r["status"] == "success")
+    failed = len(results) - success
+    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
+    return results
+
 
 
 def run_feature_extraction(preproc_out: Path, features_out: Path):
@@ -114,6 +166,32 @@ if __name__ == "__main__":
                         choices=["preprocessing", "features", "training", "full"],
                         default="full",
                         help="Which stage of the pipeline to run")
+    parser.add_argument("--parallel", action="store_true", help="Run preprocessing in parallel")
+    args = parser.parse_args()
+
+    # Ensure metadata
+    ensure_metadata(DATA_DIR, METADATA_OUT)
+
+    # Run pipeline stages based on selection
+    if args.stage in ["preprocessing", "features", "training", "full"]:
+        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
+
+    if args.stage in ["features", "training", "full"]:
+        run_feature_extraction(PREPROC_OUT, FEATURES_OUT)
+
+    if args.stage in ["training", "full"]:
+        run_training(FEATURE_MANIFEST, DEMOGRAPHICS, MODEL_CONFIG, TRAINING_CONFIG)
+    parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
+
+    if args.stage in ["preprocessing", "features", "training", "full"]:
+        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
+
+    parser.add_argument("--stage", type=str,
+                        choices=["preprocessing", "features", "training", "full"],
+                        default="full",
+                        help="Which stage of the pipeline to run")
+    parser.add_argument("--parallel", action="store_true", default=True,
+                    help="Run preprocessing and feature extraction in parallel by default")
     args = parser.parse_args()
 
     # Ensure metadata is available
@@ -124,7 +202,16 @@ if __name__ == "__main__":
         run_preprocessing(METADATA_OUT, PREPROC_OUT)
 
     if args.stage in ["features", "training", "full"]:
-        run_feature_extraction(PREPROC_OUT, FEATURES_OUT)
+        parcellation = SchaeferParcellation()
+        parcellation.load_parcellation()
+
+        run_feature_extraction_stage(
+            metadata_csv=METADATA_OUT,
+            preproc_dir=PREPROC_OUT,
+            feature_out_dir=FEATURES_OUT,
+            atlas_labels=parcellation.roi_labels,
+            parallel=args.parallel
+        )
 
     if args.stage in ["training", "full"]:
         run_training(FEATURE_MANIFEST, DEMOGRAPHICS, MODEL_CONFIG, TRAINING_CONFIG)

@@ -4,5 +4,6 @@ Input module for ADHD preprocessing pipeline
 """
 
 from .data_loader import DataDiscovery
+from utils.parallel_runner import run_parallel
 
-__all__ = ["DataDiscovery"]
+__all__ = ["DataDiscovery", "run_parallel"]
