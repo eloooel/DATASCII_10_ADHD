@@ -1,36 +1,35 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import List, Callable, Any
 from tqdm import tqdm
+import multiprocessing
+from typing import List, Callable, Any
+import sys
 
 def run_parallel(
     tasks: List[Any],
     worker_fn: Callable,
     max_workers: int = None,
-    desc: str = "Running tasks"
+    desc: str = "Processing"
 ) -> List[Any]:
     """
-    Run tasks in parallel with a progress bar.
-
+    Run tasks in parallel with progress bar
+    
     Args:
-        tasks (List[Any]): List of items to process (e.g., subjects).
-        worker_fn (Callable): Function to apply to each item.
-        max_workers (int, optional): Number of workers (defaults to os.cpu_count()).
-        desc (str): Description for tqdm progress bar.
-
-    Returns:
-        List[Any]: List of results from worker_fn.
+        tasks: List of items to process
+        worker_fn: Function to process each task
+        max_workers: Number of parallel workers (defaults to CPU count)
+        desc: Description for progress bar
     """
-    results = []
+    if max_workers is None:
+        max_workers = multiprocessing.cpu_count()
 
+    results = [None] * len(tasks)
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(worker_fn, task): task for task in tasks}
+        futures = {executor.submit(worker_fn, task): i for i, task in enumerate(tasks)}
 
-        for future in tqdm(as_completed(futures), total=len(futures), desc=desc):
-            task = futures[future]
+        for i, future in enumerate(tqdm(futures, total=len(futures), desc=desc)):
+            idx = futures[future]
             try:
-                result = future.result()
-                results.append(result)
+                results[idx] = future.result()
             except Exception as e:
-                results.append({"status": "failed", "error": str(e), "task": task})
-
+                results[idx] = {"status": "failed", "error": str(e)}
     return results

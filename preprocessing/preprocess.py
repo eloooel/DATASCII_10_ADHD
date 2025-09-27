@@ -744,7 +744,7 @@ def run_batch_cli():
 
     pipeline = PreprocessingPipeline()
 
-    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
+    print(f"\n\nStarting preprocessing for {len(metadata)} subjects...\n")
 
     # Wrap loop in tqdm progress bar
     for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Preprocessing subjects"):

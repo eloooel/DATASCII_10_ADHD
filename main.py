@@ -9,6 +9,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import torch
+from tqdm import tqdm
 
 import pandas as pd
 import numpy as np
@@ -60,99 +61,67 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
 
 
 def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True):
-    metadata = pd.read_csv(metadata_out)
-    preproc_out.mkdir(parents=True, exist_ok=True)
-
-    pipeline = PreprocessingPipeline()
-
-    def worker(row):
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
-        result = pipeline.process(func_path, subject_id)
-
-        subj_out = preproc_out / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
-
-        if result["status"] == "success":
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confound_regressors"])
-            return {"status": "success", "subject_id": subject_id}
-        else:
-            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
-
-    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
-
-    if parallel:
-        results = run_parallel(
-            tasks=[row for _, row in metadata.iterrows()],
-            worker_fn=worker,
-            max_workers=None,
-            desc="Preprocessing subjects"
-        )
-    else:
-        results = [worker(row) for _, row in metadata.iterrows()]
-
-    # Summary
-    success = sum(1 for r in results if r["status"] == "success")
-    failed = len(results) - success
-    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
-    return results
-    """
-    Run preprocessing for all subjects listed in metadata CSV.
-    - Uses subject-level parallel execution if `parallel=True`.
-    - Saves outputs per subject in preproc_out/<subject_id>/
-    """
-
-    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
-
-    # Load metadata
-    metadata = pd.read_csv(metadata_out)
-    preproc_out.mkdir(parents=True, exist_ok=True)
-
-    # Initialize preprocessing pipeline
-    pipeline = PreprocessingPipeline()
-
-    # Define worker function for a single subject
-    def worker(row):
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
-
-        # Run full preprocessing pipeline for this subject
-        result = pipeline.process(func_path, subject_id)
-
-        # Create output directory per subject
-        subj_out = preproc_out / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
-
-        # Save outputs if successful
-        if result["status"] == "success":
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confound_regressors"])
-            return {"status": "success", "subject_id": subject_id}
-        else:
-            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
-
-    # Run in parallel or sequentially
-    if parallel:
-        results = run_parallel(
-            tasks=[row for _, row in metadata.iterrows()],
-            worker_fn=worker,
-            max_workers=None,
-            desc="Preprocessing subjects"
-        )
-    else:
-        results = []
-        for _, row in metadata.iterrows():
-            results.append(worker(row))
-
-    # Summary
+    """Run preprocessing for all subjects"""
+    print("\nRunning Preprocessing...")
     
+    # Load metadata
+    try:
+        metadata = pd.read_csv(metadata_out)
+        print(f"Loaded metadata for {len(metadata)} subjects")
+    except Exception as e:
+        print(f"Error loading metadata: {e}")
+        return
+    
+    # Create output directory
+    preproc_out.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {preproc_out}")
+
+    # Initialize pipeline
+    pipeline = PreprocessingPipeline()
+
+    def worker(row):
+        try:
+            subject_id = row["subject_id"]
+            func_path = row["input_path"]
+            
+            result = pipeline.process(func_path, subject_id)
+            subj_out = preproc_out / subject_id
+            subj_out.mkdir(parents=True, exist_ok=True)
+
+            if result["status"] == "success":
+                np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
+                np.save(subj_out / "mask.npy", result["brain_mask"])
+                np.save(subj_out / "confounds.npy", result["confound_regressors"])
+                return {"status": "success", "subject_id": subject_id}
+            else:
+                return {"status": "failed", "subject_id": subject_id, "error": result.get("error")}
+        except Exception as e:
+            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), "error": str(e)}
+
+    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
+
+    # Fixed tqdm usage - use postfix for dynamic updates
+    results = []
+    
+    with tqdm(total=len(metadata), desc="Preprocessing", unit="subject", 
+              dynamic_ncols=True, leave=True) as pbar:
+        
+        for _, row in metadata.iterrows():
+            subject_id = row["subject_id"]
+            
+            # Update the postfix to show current subject
+            pbar.set_postfix_str(f"Current: {subject_id}")
+            
+            result = worker(row)
+            results.append(result)
+            
+            # Update progress bar
+            pbar.update(1)
+
+    # Summary
     success = sum(1 for r in results if r["status"] == "success")
     failed = len(results) - success
-    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
-    return results
+    print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
 
 
 

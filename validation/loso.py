@@ -18,7 +18,7 @@ from tqdm import tqdm
 
 from .base_validator import BaseValidator
 from ..models import GNNSTANHybrid
-from ..training.training_optimization import ADHDDataset, FocalLoss, EarlyStopping
+from ..training.train import ADHDDataset, FocalLoss, EarlyStopping
 
 
 class LeaveOneSiteOutValidator(BaseValidator):
