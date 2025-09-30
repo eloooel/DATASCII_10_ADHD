@@ -31,3 +31,5 @@ Instructions for downloading dependencies:
 
 For Preprocessing and Feature Extraction:
 Individual Subject-level parallel execution
+
+STRICT IMPLEMENTATION OF USING Python 3.10.10 for compatibility of libraries

@@ -23,12 +23,13 @@ from training import TrainingOptimizationModule
 from evaluation import ADHDModelEvaluator
 
 # --- Configuration ---
-DATA_DIR = Path("./data/raw")
-METADATA_OUT = DATA_DIR / "subjects_metadata.csv"
-PREPROC_OUT = DATA_DIR / "preprocessed"
-FEATURES_OUT = DATA_DIR / "features"
+RAW_DIR = Path("./data/raw")
+PREPROC_OUT = Path("./data/preprocessed")
+FEATURES_OUT = Path("./data/features")
+TRAINED_OUT = Path("./data/trained")
+METADATA_OUT = RAW_DIR / "subjects_metadata.csv"
+DEMOGRAPHICS = RAW_DIR / "demographics.csv"
 FEATURE_MANIFEST = FEATURES_OUT / "feature_manifest.csv"
-DEMOGRAPHICS = DATA_DIR / "demographics.csv"
 
 MODEL_CONFIG = {
     'n_rois': 200,
@@ -44,7 +45,7 @@ TRAINING_CONFIG = {
     'lr': 1e-3,
     'epochs': 50,
     'patience': 10,
-    'output_dir': DATA_DIR / "checkpoints"
+    'output_dir': TRAINED_OUT / "checkpoints"
 }
 
 
@@ -180,7 +181,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Ensure metadata
-    ensure_metadata(DATA_DIR, METADATA_OUT)
+    ensure_metadata(RAW_DIR, METADATA_OUT)
 
     # Run pipeline stages based on selection
     if args.stage in ["preprocessing", "features", "training", "full"]:
@@ -205,7 +206,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Ensure metadata is available
-    ensure_metadata(DATA_DIR, METADATA_OUT)
+    ensure_metadata(RAW_DIR, METADATA_OUT)
 
     # Run pipeline stages based on user selection
     if args.stage in ["preprocessing", "features", "training", "full"]:
