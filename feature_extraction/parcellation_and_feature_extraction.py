@@ -12,7 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy.ndimage import zoom
 import warnings
 
-from utils.parallel_runner import run_parallel
+from utils import run_parallel
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
@@ -104,18 +104,33 @@ class FeatureExtractor:
 
     def process_subject(self, unique_id: str, roi_timeseries: np.ndarray) -> dict:
         outputs = {}
+
+        # ROI timeseries file
         ts_path = self.output_dir / f"{unique_id}_roi_timeseries.csv"
-        pd.DataFrame(roi_timeseries, columns=[f"ROI_{i+1}_{lbl}" for i, lbl in enumerate(self.labels)]).to_csv(ts_path, index=False)
+        if not ts_path.exists():
+            pd.DataFrame(
+                roi_timeseries,
+                columns=[f"ROI_{i+1}_{lbl}" for i, lbl in enumerate(self.labels)]
+            ).to_csv(ts_path, index=False)
         outputs['roi_timeseries'] = str(ts_path)
-        conn = self.conn_extractor.compute_connectivity(roi_timeseries)
+
+        # Connectivity matrix
         npy_path = self.output_dir / f"{unique_id}_connectivity_matrix.npy"
-        np.save(npy_path, conn)
-        outputs['connectivity_npy'] = str(npy_path)
         csv_path = self.output_dir / f"{unique_id}_connectivity_matrix.csv"
-        pd.DataFrame(conn, index=[f"ROI_{i+1}" for i in range(len(self.labels))],
-                     columns=[f"ROI_{i+1}" for i in range(len(self.labels))]).to_csv(csv_path)
+        if not (npy_path.exists() and csv_path.exists()):
+            conn = self.conn_extractor.compute_connectivity(roi_timeseries)
+            np.save(npy_path, conn)
+            pd.DataFrame(
+                conn,
+                index=[f"ROI_{i+1}" for i in range(len(self.labels))],
+                columns=[f"ROI_{i+1}" for i in range(len(self.labels))]
+            ).to_csv(csv_path)
+
+        outputs['connectivity_npy'] = str(npy_path)
         outputs['connectivity_csv'] = str(csv_path)
+
         return outputs
+
 
 
 # ----------------- Batch Processing -----------------
@@ -126,9 +141,28 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
     subj_dir = preproc_dir / subject_id
     func_path = subj_dir / "func_preproc.npy"
     mask_path = subj_dir / "mask.npy"
+
+    # --- Check preprocessing existence ---
     if not func_path.exists() or not mask_path.exists():
         return {"subject_id": subject_id, "status": "failed", "error": "Missing preprocessed files"}
 
+    # --- Check if features already exist ---
+    ts_path = feature_out_dir / f"{subject_id}_roi_timeseries.csv"
+    conn_npy_path = feature_out_dir / f"{subject_id}_connectivity_matrix.npy"
+    conn_csv_path = feature_out_dir / f"{subject_id}_connectivity_matrix.csv"
+
+    if ts_path.exists() and conn_npy_path.exists() and conn_csv_path.exists():
+        return {
+            "subject_id": subject_id,
+            "status": "skipped",
+            "outputs": {
+                "roi_timeseries": str(ts_path),
+                "connectivity_npy": str(conn_npy_path),
+                "connectivity_csv": str(conn_csv_path),
+            }
+        }
+
+    # --- Normal feature extraction ---
     func_data = np.load(func_path)
     mask = np.load(mask_path)
     parcellation = SchaeferParcellation()
@@ -137,6 +171,7 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
 
     extractor = FeatureExtractor(feature_out_dir, parcellation_labels=atlas_labels)
     outputs = extractor.process_subject(subject_id, roi_timeseries)
+
     return {"subject_id": subject_id, "status": "success", "outputs": outputs}
 
 
@@ -160,10 +195,54 @@ def run_feature_extraction_parallel(metadata_csv: Path, preproc_dir: Path, featu
 
 def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path,
                                  atlas_labels: list, parallel: bool = True, max_workers: int = None):
-    if parallel:
-        run_feature_extraction_parallel(metadata_csv, preproc_dir, feature_out_dir, atlas_labels, max_workers)
+    import pandas as pd
+    metadata = pd.read_csv(metadata_csv)
+    feature_out_dir.mkdir(parents=True, exist_ok=True)
+
+    print("\nRunning Feature Extraction...")
+    results = []
+
+    # --- Sequential (single process, tqdm like preprocessing) ---
+    if not parallel:
+        from tqdm import tqdm
+        with tqdm(total=len(metadata), desc="Feature Extraction", unit="subject",
+                  dynamic_ncols=True, leave=True) as pbar:
+            for _, row in metadata.iterrows():
+                subject_id = row["subject_id"]
+                pbar.set_postfix_str(f"Current: {subject_id}")
+
+                result = extract_features_worker(row, preproc_dir, feature_out_dir, atlas_labels)
+                results.append(result)
+
+                pbar.update(1)
+
+    # --- Parallel version with same tqdm ---
     else:
-        import pandas as pd
-        metadata = pd.read_csv(metadata_csv)
-        for _, row in metadata.iterrows():
-            extract_features_worker(row, preproc_dir, feature_out_dir, atlas_labels)
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        from tqdm import tqdm
+
+        tasks = [row for _, row in metadata.iterrows()]
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(
+                extract_features_worker, row, preproc_dir, feature_out_dir, atlas_labels
+            ): row["subject_id"] for _, row in metadata.iterrows()}
+
+            with tqdm(total=len(futures), desc="Feature Extraction", unit="subject",
+                      dynamic_ncols=True, leave=True) as pbar:
+                for future in as_completed(futures):
+                    subject_id = futures[future]
+                    pbar.set_postfix_str(f"Current: {subject_id}")
+
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        results.append({"subject_id": subject_id, "status": "failed", "error": str(e)})
+
+                    pbar.update(1)
+
+    # --- Summary ---
+    success = sum(1 for r in results if r["status"] == "success")
+    failed = sum(1 for r in results if r["status"] == "failed")
+    print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
+    return results
+
