@@ -434,8 +434,8 @@ class PreprocessingPipeline:
                 filtered_data[x, y, z, :] = voxel_ts
 
         # Copy non-brain voxels unchanged
-        filtered_data[~brain_mask] = img_data[~brain_mask]
-
+        for t in range(img_data.shape[-1]):
+            filtered_data[..., t][~brain_mask] = img_data[..., t][~brain_mask]
         # Create filtered nibabel image
         filtered_img = nib.Nifti1Image(filtered_data, data_img.affine, data_img.header)
         
@@ -639,6 +639,10 @@ class PreprocessingPipeline:
         }
         
 def run_batch_cli():
+    import argparse
+    import nibabel as nib
+    import numpy as np
+
     parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
     parser.add_argument("--metadata", type=str, required=True,
                         help="CSV file with columns: subject_id, input_path")
@@ -652,151 +656,68 @@ def run_batch_cli():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pipeline = PreprocessingPipeline()
+    # Add output dir to each row for worker
+    metadata["out_dir"] = str(out_dir)
 
-    def worker(row):
-        try:
-            subject_id = row["subject_id"]
-            func_path = row["input_path"]
-            result = pipeline.process(func_path, subject_id)
+    results = []
 
-            subj_out = out_dir / subject_id
-            subj_out.mkdir(parents=True, exist_ok=True)
+    # Run parallel processing using run_parallel
+    # Main process manages the progress bar
+    with tqdm(total=len(metadata), desc="Preprocessing subjects") as pbar:
+        def worker_wrapper(row):
+            res = _process_subject(row)
+            # Update progress bar safely
+            pbar.update(1)
+            # Print message for each subject
+            tqdm.write(res["message"])
+            return res
 
-            if result["status"] == "success":
-                np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-                np.save(subj_out / "mask.npy", result["brain_mask"])
-                np.save(subj_out / "confounds.npy", result["confound_regressors"])
-                return {"status": "success", "subject_id": subject_id}
-            else:
-                return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
-        except Exception as e:
-            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), "error": str(e)}
-
-
-    # Run parallel with progress bar
-    print(f"\nStarting parallel preprocessing for {len(metadata)} subjects...\n")
-    results = run_parallel(
-        tasks=[row for _, row in metadata.iterrows()],
-        worker_fn=worker,
-        max_workers=args.workers,
-        desc="Preprocessing subjects"
-    )
+        results = run_parallel(
+            tasks=metadata.to_dict("records"),
+            worker_fn=worker_wrapper,
+            max_workers=args.workers,
+            desc=None  # desc handled by outer tqdm
+        )
 
     # Summary
     success = sum(1 for r in results if r["status"] == "success")
     failed = len(results) - success
     print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
-    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
-    parser.add_argument("--metadata", type=str, required=True,
-                        help="CSV file with columns: subject_id, input_path")
-    parser.add_argument("--out-dir", type=str, required=True,
-                        help="Directory to store preprocessed outputs")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Number of parallel workers (default = all cores)")
-    args = parser.parse_args()
 
-    metadata = pd.read_csv(args.metadata)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
 
+def _process_subject(row):
+    """Process a single subject; returns result dict, no printing inside."""
     pipeline = PreprocessingPipeline()
+    subject_id = row["subject_id"]
+    func_path = row["input_path"]
+    site_name = row.get("site", "UnknownSite")
 
-    def worker(row):
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
+    result = pipeline.process(func_path, subject_id)
 
-        result = pipeline.process(func_path, subject_id)
+    # Create site-level folder
+    subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
+    subj_out.mkdir(parents=True, exist_ok=True)
 
-        subj_out = out_dir / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
-
-        if result["status"] == "success":
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confound_regressors"])
-            return {"status": "success", "subject_id": subject_id}
-        else:
-            return {"status": "failed", "subject_id": subject_id, "error": result["error"]}
-
-    print(f"\nStarting parallel preprocessing for {len(metadata)} subjects...\n")
-    results = run_parallel(
-        tasks=[row for _, row in metadata.iterrows()],
-        worker_fn=worker,
-        max_workers=args.workers,
-        desc="Preprocessing subjects"
-    )
-
-    # Summary
-    success = sum(1 for r in results if r["status"] == "success")
-    failed = len(results) - success
-    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
-    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
-    parser.add_argument("--metadata", type=str, required=True,
-                        help="CSV file with columns: subject_id, input_path")
-    parser.add_argument("--out-dir", type=str, required=True,
-                        help="Directory to store preprocessed outputs")
-    args = parser.parse_args()
-
-    metadata = pd.read_csv(args.metadata)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    pipeline = PreprocessingPipeline()
-
-    print(f"\n\nStarting preprocessing for {len(metadata)} subjects...\n")
-
-    # Wrap loop in tqdm progress bar
-    for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Preprocessing subjects"):
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
-
-        print(f"\nProcessing subject {subject_id} from {func_path}...")
-        result = pipeline.process(func_path, subject_id)
-
-        subj_out = out_dir / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
-
-        if result["status"] == "success":
-            # Save outputs as .npy
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confound_regressors"])
-            print(f"Completed {subject_id}")
-        else:
-            print(f"Failed {subject_id}: {result['error']}")
-
-    print("\nPreprocessing finished for all subjects.")
-    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
-    parser.add_argument("--metadata", type=str, required=True,
-                        help="CSV file with columns: subject_id, func_path")
-    parser.add_argument("--out-dir", type=str, required=True,
-                        help="Directory to store preprocessed outputs")
-
-    args = parser.parse_args()
-    metadata = pd.read_csv(args.metadata)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    pipeline = PreprocessingPipeline()
-
-    for _, row in metadata.iterrows():
-        subject_id = row["subject_id"]
-        func_path = row["input_path"]
-
-        print(f"\n Preprocessing subject {subject_id} from {func_path}...")
-        result = pipeline.process(func_path, subject_id)
-
-        subj_out = out_dir / subject_id
-        subj_out.mkdir(parents=True, exist_ok=True)
-
-        if result["status"] == "success":
-            np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-            np.save(subj_out / "mask.npy", result["brain_mask"])
-            np.save(subj_out / "confounds.npy", result["confounds"])
-            print(f"Completed {subject_id}")
-        else:
-            print(f"Failed {subject_id}: {result['error']}")
+    if result["status"] == "success":
+        nib.save(result["processed_data"], subj_out / "func_preproc.nii.gz")
+        nib.save(nib.Nifti1Image(result["brain_mask"].astype(np.uint8),
+                                 result["processed_data"].affine),
+                 subj_out / "mask.nii.gz")
+        np.save(subj_out / "confounds.npy", result["confound_regressors"])
+        return {
+            "status": "success",
+            "subject_id": subject_id,
+            "site": site_name,
+            "message": f"Preprocessed {subject_id} (Site: {site_name})"
+        }
+    else:
+        return {
+            "status": "failed",
+            "subject_id": subject_id,
+            "site": site_name,
+            "error": result.get("error", "Unknown error"),
+            "message": f"Failed {subject_id} (Site: {site_name})"
+        }
 
 if __name__ == "__main__":
     run_batch_cli()
