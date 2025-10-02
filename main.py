@@ -61,10 +61,10 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
         print(f"Found existing metadata CSV at {metadata_out}")
 
 
-def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True):
+def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True, max_workers: int = None):
     """Run preprocessing for all subjects"""
     print("\nRunning Preprocessing...")
-    
+
     # Load metadata
     try:
         metadata = pd.read_csv(metadata_out)
@@ -72,19 +72,21 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
     except Exception as e:
         print(f"Error loading metadata: {e}")
         return
-    
+
     # Create output directory
     preproc_out.mkdir(parents=True, exist_ok=True)
     print(f"Output directory: {preproc_out}")
 
-    # Initialize pipeline
-    pipeline = PreprocessingPipeline()
+    def _process_subject(row):
+        """Worker for preprocessing a single subject"""
+        from preprocessing import PreprocessingPipeline
+        import numpy as np
 
-    def worker(row):
+        pipeline = PreprocessingPipeline()
         try:
             subject_id = row["subject_id"]
             func_path = row["input_path"]
-            
+
             result = pipeline.process(func_path, subject_id)
             subj_out = preproc_out / subject_id
             subj_out.mkdir(parents=True, exist_ok=True)
@@ -101,25 +103,21 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
 
     print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
 
-    # Fixed tqdm usage - use postfix for dynamic updates
-    results = []
-    
-    with tqdm(total=len(metadata), desc="Preprocessing", unit="subject", 
-              dynamic_ncols=True, leave=True) as pbar:
-        
-        for _, row in metadata.iterrows():
-            subject_id = row["subject_id"]
-            
-            # Update the postfix to show current subject
-            pbar.set_postfix_str(f"Current: {subject_id}")
-            
-            result = worker(row)
-            results.append(result)
-            
-            # Update progress bar
-            pbar.update(1)
+    # --- Run parallel or sequential ---
+    if parallel:
+        from utils.parallel_runner import run_parallel
+        results = run_parallel(
+            tasks=[row for _, row in metadata.iterrows()],
+            worker_fn=_process_subject,
+            max_workers=max_workers
+        )
+    else:
+        results = []
+        from tqdm import tqdm
+        for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Preprocessing subjects"):
+            results.append(_process_subject(row))
 
-    # Summary
+    # --- Summary ---
     success = sum(1 for r in results if r["status"] == "success")
     failed = len(results) - success
     print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
@@ -177,42 +175,18 @@ if __name__ == "__main__":
                         choices=["preprocessing", "features", "training", "full"],
                         default="full",
                         help="Which stage of the pipeline to run")
-    parser.add_argument("--parallel", action="store_true", help="Run preprocessing in parallel")
-    args = parser.parse_args()
-
-    # Ensure metadata
-    ensure_metadata(RAW_DIR, METADATA_OUT)
-
-    # Run pipeline stages based on selection
-    if args.stage in ["preprocessing", "features", "training", "full"]:
-        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
-
-    if args.stage in ["features", "training", "full"]:
-        run_feature_extraction(PREPROC_OUT, FEATURES_OUT)
-
-    if args.stage in ["training", "full"]:
-        run_training(FEATURE_MANIFEST, DEMOGRAPHICS, MODEL_CONFIG, TRAINING_CONFIG)
-    parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
-
-    if args.stage in ["preprocessing", "features", "training", "full"]:
-        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
-
-    parser.add_argument("--stage", type=str,
-                        choices=["preprocessing", "features", "training", "full"],
-                        default="full",
-                        help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
-                    help="Run preprocessing and feature extraction in parallel by default")
+                        help="Run preprocessing and feature extraction in parallel by default")
     args = parser.parse_args()
 
     # Ensure metadata is available
     ensure_metadata(RAW_DIR, METADATA_OUT)
 
-    # Run pipeline stages based on user selection
-    if args.stage in ["preprocessing", "features", "training", "full"]:
-        run_preprocessing(METADATA_OUT, PREPROC_OUT)
+    # --- Stage-based execution ---
+    if args.stage in ["preprocessing", "full"]:
+        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
 
-    if args.stage in ["features", "training", "full"]:
+    if args.stage in ["features", "full"]:
         parcellation = SchaeferParcellation()
         parcellation.load_parcellation()
 
