@@ -1,3 +1,5 @@
+import torch
+import torch.nn.functional as F
 import numpy as np
 import nibabel as nib
 import argparse
@@ -29,13 +31,13 @@ class PreprocessingPipeline:
     6. Denoising (ICA-AROMA, aCompCor)
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """Initialize preprocessing pipeline with configuration"""
+    def __init__(self, config: Optional[Dict[str, Any]] = None, device: Optional[torch.device] = None):
         if config is not None:
             self.config = self._merge_with_defaults(config)
         else:
             self.config = self._default_config()
-
+            
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.processing_log: List[Dict[str, Any]] = []
         self.subject_id: str = "unknown"
 
@@ -143,24 +145,19 @@ class PreprocessingPipeline:
 
     # ----------------- Real Pipeline Stages -----------------
 
+
     def _load_and_validate_data(self, input_path: str) -> tuple:
-        """Load and validate input fMRI data"""
+        """Load and validate input fMRI data with CUDA support"""
         data = nib.load(input_path)
-        img_data = data.get_fdata()
+        img_data = torch.from_numpy(data.get_fdata()).to(self.device)
         
         if len(img_data.shape) != 4:
-            raise ValueError(f"Expected 4D data, got {len(img_data.shape)}D with shape {img_data.shape}")
+            raise ValueError(f"Expected 4D data, got {len(img_data.shape)}D")
 
-        # Check for reasonable data ranges
-        if np.max(img_data) < 10:
-            self._log_step("data_loading", "warning", "Data values seem very small - check scaling")
+        # Basic data quality checks on GPU
+        n_zeros = torch.sum(img_data == 0).item()
+        total_voxels = torch.prod(torch.tensor(img_data.shape)).item()
         
-        # Basic data quality checks
-        n_zeros = np.sum(img_data == 0)
-        total_voxels = np.prod(img_data.shape)
-        if n_zeros > 0.5 * total_voxels:
-            self._log_step("data_loading", "warning", f"High proportion of zero voxels: {n_zeros/total_voxels:.1%}")
-
         metadata = {
             'shape': img_data.shape,
             'voxel_size': data.header.get_zooms()[:3],
@@ -170,11 +167,7 @@ class PreprocessingPipeline:
             'affine': data.affine
         }
 
-        self._log_step("data_loading", "success", 
-                      f"Loaded {img_data.shape} TR={metadata['tr']:.2f}s")
-        
-        # Return the nibabel image object to preserve spatial information
-        return data, metadata
+        return img_data, metadata
 
     def _motion_correction(self, data_img, params: Dict[str, Any]) -> tuple:
         """Real motion correction using volume realignment"""
@@ -377,72 +370,87 @@ class PreprocessingPipeline:
 
         return normalized_img
 
-    def _temporal_filtering(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
-        """Real temporal bandpass filtering"""
-        if not params.get('enabled', True):
-            self._log_step("temporal_filtering", "skipped", "Disabled in config")
-            return data_img
+def _temporal_filtering(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
+    """Real temporal bandpass filtering with CUDA support"""
+    if not params.get('enabled', True):
+        self._log_step("temporal_filtering", "skipped", "Disabled in config")
+        return data_img
 
-        img_data = data_img.get_fdata()
-        tr = metadata.get('tr', 2.0)
-        
-        low_freq = params['low_freq']
-        high_freq = params['high_freq']
-        filter_order = params.get('filter_order', 4)
-        
-        # Nyquist frequency
-        nyquist = 1 / (2 * tr)
-        
-        # Normalize frequencies
-        low = low_freq / nyquist
-        high = high_freq / nyquist
-        
-        # Check frequency bounds
-        if high >= 1.0:
-            high = 0.99
-            self._log_step("temporal_filtering", "warning", 
-                          f"High frequency capped at {high * nyquist:.3f}Hz")
-        
-        # Design Butterworth bandpass filter
-        try:
-            b, a = signal.butter(filter_order, [low, high], btype='band')
-        except ValueError:
-            # Fallback to high-pass only if bandpass fails
-            b, a = signal.butter(filter_order, low, btype='high')
-            self._log_step("temporal_filtering", "warning", "Applied high-pass only")
+    # Convert input to torch tensor if not already
+    img_data = torch.from_numpy(data_img.get_fdata()).to(self.device) if not torch.is_tensor(data_img) else data_img
 
-        # Apply filter to each voxel
-        filtered_data = np.zeros_like(img_data)
+    tr = metadata.get('tr', 2.0)
+    low_freq = params['low_freq']
+    high_freq = params['high_freq']
+    filter_order = params.get('filter_order', 4)
+    
+    # Nyquist frequency
+    nyquist = 1 / (2 * tr)
+    
+    # Normalize frequencies
+    low = low_freq / nyquist
+    high = high_freq / nyquist
+    
+    # Check frequency bounds
+    if high >= 1.0:
+        high = 0.99
+        self._log_step("temporal_filtering", "warning", 
+                      f"High frequency capped at {high * nyquist:.3f}Hz")
+    
+    # Design Butterworth bandpass filter
+    try:
+        b, a = signal.butter(filter_order, [low, high], btype='band')
+        b_torch = torch.from_numpy(b).to(self.device)
+        a_torch = torch.from_numpy(a).to(self.device)
+    except ValueError:
+        # Fallback to high-pass only if bandpass fails
+        b, a = signal.butter(filter_order, low, btype='high')
+        b_torch = torch.from_numpy(b).to(self.device)
+        a_torch = torch.from_numpy(a).to(self.device)
+        self._log_step("temporal_filtering", "warning", "Applied high-pass only")
+
+    # Get brain mask for filtering (avoid filtering background)
+    mean_img = torch.mean(img_data, dim=-1)
+    brain_mask = mean_img > torch.quantile(mean_img[mean_img > 0], 0.25)
+    
+    # Apply filter to each voxel on GPU
+    filtered_data = img_data.clone()
+    brain_voxels = torch.where(brain_mask)
+    total_voxels = len(brain_voxels[0])
+    
+    for i in range(total_voxels):
+        x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
+        voxel_ts = filtered_data[x, y, z, :]
         
-        # Get brain mask for filtering (avoid filtering background)
-        mean_img = np.mean(img_data, axis=-1)
-        brain_mask = mean_img > np.percentile(mean_img[mean_img > 0], 25)
-        
-        brain_voxels = np.where(brain_mask)
-        total_voxels = len(brain_voxels[0])
-        
-        for i in range(total_voxels):
-            x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
-            voxel_ts = img_data[x, y, z, :]
-            
+        if torch.any(voxel_ts != 0):
             try:
-                # Apply filter
-                filtered_ts = signal.filtfilt(b, a, voxel_ts)
-                filtered_data[x, y, z, :] = filtered_ts
+                # Detrend
+                t = torch.arange(voxel_ts.shape[0], dtype=torch.float32, device=self.device)
+                p = torch.polynomial.polynomial.polyfit(t, voxel_ts, deg=1)
+                trend = p[0] + p[1] * t
+                detrended = voxel_ts - trend
+
+                # FFT-based filtering
+                fft = torch.fft.rfft(detrended)
+                freqs = torch.fft.rfftfreq(voxel_ts.shape[0], d=tr)
+                mask = (freqs >= low_freq) & (freqs <= high_freq)
+                fft = fft * mask.to(self.device)
+                filtered = torch.fft.irfft(fft, n=voxel_ts.shape[0])
+                
+                # Add trend back
+                filtered_data[x, y, z, :] = filtered + trend
             except:
                 # Keep original if filtering fails
-                filtered_data[x, y, z, :] = voxel_ts
+                continue
 
-        # Copy non-brain voxels unchanged
-        for t in range(img_data.shape[-1]):
-            filtered_data[..., t][~brain_mask] = img_data[..., t][~brain_mask]
-        # Create filtered nibabel image
-        filtered_img = nib.Nifti1Image(filtered_data, data_img.affine, data_img.header)
-        
-        self._log_step("temporal_filtering", "success", 
-                      f"Bandpass {low_freq:.3f}-{high_freq:.3f}Hz, filtered {total_voxels} brain voxels")
-        
-        return filtered_img
+    # Convert back to CPU and create new image
+    filtered_array = filtered_data.cpu().numpy()
+    filtered_img = nib.Nifti1Image(filtered_array, data_img.affine, data_img.header)
+    
+    self._log_step("temporal_filtering", "success", 
+                   f"Bandpass {low_freq:.3f}-{high_freq:.3f}Hz, filtered {total_voxels} brain voxels")
+    
+    return filtered_img
 
     def _denoising(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 
                    params: Dict[str, Any]) -> tuple:

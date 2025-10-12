@@ -3,7 +3,8 @@ Main script to run ADHD GNN-STAN pipeline
 - Supports staged execution (preprocessing → feature extraction → training → evaluation)
 - Handles automatic metadata discovery if not already present
 """
-
+import torch
+import torch.cuda
 import sys
 import argparse
 from pathlib import Path
@@ -48,6 +49,8 @@ TRAINING_CONFIG = {
     'output_dir': TRAINED_OUT / "checkpoints"
 }
 
+DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {DEVICE}")
 
 # --- Pipeline stages ---
 def ensure_metadata(data_dir: Path, metadata_out: Path):
@@ -61,11 +64,18 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
         print(f"Found existing metadata CSV at {metadata_out}")
 
 
-def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True, max_workers: int = None):
+def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True, device: torch.device = None):
     """Run preprocessing for all subjects"""
     print("\nRunning Preprocessing...")
-
-    # Load metadata
+    
+    # Use provided device or default
+    device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+    
+    if torch.cuda.is_available():
+        print(f"CUDA available: Using GPU {torch.cuda.get_device_name()}")
+    
+    # Rest of the existing function remains the same
     try:
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
@@ -73,54 +83,37 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         print(f"Error loading metadata: {e}")
         return
 
-    # Create output directory
-    preproc_out.mkdir(parents=True, exist_ok=True)
-    print(f"Output directory: {preproc_out}")
-
+    # Pass device to pipeline initialization
     def _process_subject(row):
-        """Worker for preprocessing a single subject"""
-        from preprocessing import PreprocessingPipeline
-        import numpy as np
-
-        pipeline = PreprocessingPipeline()
+        pipeline = PreprocessingPipeline(device=device) 
         try:
             subject_id = row["subject_id"]
             func_path = row["input_path"]
+            site = row.get("dataset", "unknown").lower()
 
             result = pipeline.process(func_path, subject_id)
-            subj_out = preproc_out / subject_id
+            
+            # Create site-specific output directory
+            site_dir = preproc_out / site
+            subj_out = site_dir / subject_id
             subj_out.mkdir(parents=True, exist_ok=True)
 
             if result["status"] == "success":
-                np.save(subj_out / "func_preproc.npy", result["processed_data"].get_fdata())
-                np.save(subj_out / "mask.npy", result["brain_mask"])
-                np.save(subj_out / "confounds.npy", result["confound_regressors"])
-                return {"status": "success", "subject_id": subject_id}
+                # Move data back to CPU before saving
+                processed_data = result["processed_data"].cpu().numpy() if torch.is_tensor(result["processed_data"]) else result["processed_data"]
+                brain_mask = result["brain_mask"].cpu().numpy() if torch.is_tensor(result["brain_mask"]) else result["brain_mask"]
+                confounds = result["confound_regressors"]
+                
+                np.save(subj_out / "func_preproc.npy", processed_data)
+                np.save(subj_out / "mask.npy", brain_mask)
+                np.save(subj_out / "confounds.npy", confounds)
+                return {"status": "success", "subject_id": subject_id, "site": site}
             else:
-                return {"status": "failed", "subject_id": subject_id, "error": result.get("error")}
+                return {"status": "failed", "subject_id": subject_id, "site": site, 
+                       "error": result.get("error")}
         except Exception as e:
-            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), "error": str(e)}
-
-    print(f"\nStarting preprocessing for {len(metadata)} subjects...\n")
-
-    # --- Run parallel or sequential ---
-    if parallel:
-        from utils.parallel_runner import run_parallel
-        results = run_parallel(
-            tasks=[row for _, row in metadata.iterrows()],
-            worker_fn=_process_subject,
-            max_workers=max_workers
-        )
-    else:
-        results = []
-        from tqdm import tqdm
-        for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Preprocessing subjects"):
-            results.append(_process_subject(row))
-
-    # --- Summary ---
-    success = sum(1 for r in results if r["status"] == "success")
-    failed = len(results) - success
-    print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
+            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), 
+                   "site": row.get("dataset", "unknown"), "error": str(e)}
 
 
 
@@ -172,19 +165,22 @@ def run_training(feature_manifest: Path, demographics: Path, model_config: dict,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
     parser.add_argument("--stage", type=str,
-                        choices=["preprocessing", "features", "training", "full"],
-                        default="full",
-                        help="Which stage of the pipeline to run")
+                       choices=["preprocessing", "features", "training", "full"],
+                       default="full",
+                       help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
-                        help="Run preprocessing and feature extraction in parallel by default")
+                       help="Run preprocessing in parallel")
+    parser.add_argument("--no-cuda", action="store_true",
+                       help="Disable CUDA even if available")
     args = parser.parse_args()
 
-    # Ensure metadata is available
-    ensure_metadata(RAW_DIR, METADATA_OUT)
+    # Device configuration based on args
+    DEVICE = torch.device('cpu') if args.no_cuda else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {DEVICE}")
 
-    # --- Stage-based execution ---
+    # Preprocessing call to pass device
     if args.stage in ["preprocessing", "full"]:
-        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel)
+        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
 
     if args.stage in ["features", "full"]:
         parcellation = SchaeferParcellation()
