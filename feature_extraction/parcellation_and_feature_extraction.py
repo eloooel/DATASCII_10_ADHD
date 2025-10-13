@@ -136,14 +136,16 @@ class FeatureExtractor:
 # ----------------- Batch Processing -----------------
 
 def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list):
-    import numpy as np
+    """Worker function for feature extraction"""
+
+    
     subject_id = row["subject_id"]
     site = row.get("dataset", "unknown").lower()
     
-    # Update paths to include site directory
-    subj_dir = preproc_dir / site / subject_id
-    func_path = subj_dir / "func_preproc.npy"
-    mask_path = subj_dir / "mask.npy"
+    # Update paths for NIfTI files
+    func_path = preproc_dir / row['site'] / row['subject_id'] / "func_preproc.nii.gz"  # Changed from .npy
+    mask_path = preproc_dir / row['site'] / row['subject_id'] / "mask.nii.gz"          # Changed from .npy
+    confounds_path = preproc_dir / row['site'] / row['subject_id'] / "confounds.csv"    # Changed from .npy
 
     # Create site-specific feature output directory
     site_feature_dir = feature_out_dir / site
@@ -154,35 +156,25 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         return {"subject_id": subject_id, "site": site, 
                 "status": "failed", "error": "Missing preprocessed files"}
 
-    # Check if features already exist
-    ts_path = site_feature_dir / f"{subject_id}_roi_timeseries.csv"
-    conn_npy_path = site_feature_dir / f"{subject_id}_connectivity_matrix.npy"
-    conn_csv_path = site_feature_dir / f"{subject_id}_connectivity_matrix.csv"
-
-    if ts_path.exists() and conn_npy_path.exists() and conn_csv_path.exists():
-        return {
-            "subject_id": subject_id,
-            "site": site,
-            "status": "skipped",
-            "outputs": {
-                "roi_timeseries": str(ts_path),
-                "connectivity_npy": str(conn_npy_path),
-                "connectivity_csv": str(conn_csv_path),
-            }
-        }
-
-    # Normal feature extraction
+    # Load NIfTI data
     try:
-        func_data = np.load(func_path)
-        mask = np.load(mask_path)
+        func_img = nib.load(func_path)
+        mask_img = nib.load(mask_path)
+        
+        func_data = func_img.get_fdata()
+        mask_data = mask_img.get_fdata()
+        
+        # Rest of feature extraction remains the same
         parcellation = SchaeferParcellation()
         parcellation.load_parcellation()
-        roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask)
+        roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
 
-        extractor = FeatureExtractor(site_feature_dir, parcellation_labels=atlas_labels)
+        # Save features (now converting to NPY/CSV for downstream analysis)
+        extractor = FeatureExtractor(site_feature_dir, atlas_labels)
         outputs = extractor.process_subject(subject_id, roi_timeseries)
 
         return {"subject_id": subject_id, "site": site, "status": "success", "outputs": outputs}
+        
     except Exception as e:
         return {"subject_id": subject_id, "site": site, 
                 "status": "failed", "error": str(e)}

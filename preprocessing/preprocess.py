@@ -707,11 +707,17 @@ def _process_subject(row):
     subj_out.mkdir(parents=True, exist_ok=True)
 
     if result["status"] == "success":
+        # Save as NIfTI files
         nib.save(result["processed_data"], subj_out / "func_preproc.nii.gz")
         nib.save(nib.Nifti1Image(result["brain_mask"].astype(np.uint8),
-                                 result["processed_data"].affine),
-                 subj_out / "mask.nii.gz")
-        np.save(subj_out / "confounds.npy", result["confound_regressors"])
+                                result["processed_data"].affine),
+                subj_out / "mask.nii.gz")
+        
+        # Save confounds as CSV instead of NPY
+        pd.DataFrame(result["confound_regressors"]).to_csv(
+            subj_out / "confounds.csv", index=False
+        )
+        
         return {
             "status": "success",
             "subject_id": subject_id,
