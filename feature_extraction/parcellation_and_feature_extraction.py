@@ -180,24 +180,6 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
                 "status": "failed", "error": str(e)}
 
 
-def run_feature_extraction_parallel(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path,
-                                    atlas_labels: list, max_workers: int = None):
-    import pandas as pd
-    metadata = pd.read_csv(metadata_csv)
-    feature_out_dir.mkdir(parents=True, exist_ok=True)
-
-    results = run_parallel(
-        tasks=[row for _, row in metadata.iterrows()],
-        worker_fn=lambda row: extract_features_worker(row, preproc_dir, feature_out_dir, atlas_labels),
-        max_workers=max_workers,
-        desc="Extracting features"
-    )
-
-    success = sum(1 for r in results if r["status"] == "success")
-    print(f"Feature extraction complete. Success: {success}/{len(metadata)}")
-    return results
-
-
 def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path,
                                  atlas_labels: list, parallel: bool = True, max_workers: int = None):
     import pandas as pd

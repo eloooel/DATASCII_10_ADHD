@@ -14,9 +14,7 @@ from scipy.stats import pearsonr
 from sklearn.decomposition import PCA, FastICA
 import warnings
 
-
 warnings.filterwarnings('ignore', category=RuntimeWarning)
-
 
 class PreprocessingPipeline:
     def __init__(self, config: Optional[Dict[str, Any]] = None, device: Optional[torch.device] = None):
@@ -676,7 +674,7 @@ class PreprocessingPipeline:
         failed = sum(1 for e in self.processing_log if e['status'] == 'failed')
         skipped = sum(1 for e in self.processing_log if e['status'] == 'skipped')
         warnings = sum(1 for e in self.processing_log if e['status'] == 'warning')
-        
+
         return {
             'subject_id': self.subject_id,
             'total_steps': total,
@@ -686,75 +684,71 @@ class PreprocessingPipeline:
             'warning_steps': warnings,
             'completion_rate': (success / total * 100) if total > 0 else 0
         }
-        
-def run_batch_cli():
-    import argparse
-    import nibabel as nib
-    import numpy as np
 
-    parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
-    parser.add_argument("--metadata", type=str, required=True,
-                        help="CSV file with columns: subject_id, input_path")
-    parser.add_argument("--out-dir", type=str, required=True,
-                        help="Directory to store preprocessed outputs")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Number of parallel workers (default = all cores)")
-    args = parser.parse_args()
+# def run_batch_cli():
+#     import argparse
+#     import nibabel as nib
+#     import numpy as np
 
-    metadata = pd.read_csv(args.metadata)
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+#     parser = argparse.ArgumentParser(description="Batch rs-fMRI Preprocessing")
+#     parser.add_argument("--metadata", type=str, required=True,
+#                         help="CSV file with columns: subject_id, input_path")
+#     parser.add_argument("--out-dir", type=str, required=True,
+#                         help="Directory to store preprocessed outputs")
+#     parser.add_argument("--workers", type=int, default=None,
+#                         help="Number of parallel workers (default = all cores)")
+#     args = parser.parse_args()
 
-    # Add output dir to each row for worker
-    metadata["out_dir"] = str(out_dir)
+#     metadata = pd.read_csv(args.metadata)
+#     out_dir = Path(args.out_dir)
+#     out_dir.mkdir(parents=True, exist_ok=True)
 
-    results = []
+#     # Add output dir to each row for worker
+#     metadata["out_dir"] = str(out_dir)
+#     results = []
 
-    # Run parallel processing using run_parallel
-    # Main process manages the progress bar
-    with tqdm(total=len(metadata), desc="Preprocessing subjects") as pbar:
-        def worker_wrapper(row):
-            res = _process_subject(row)
-            # Update progress bar safely
-            pbar.update(1)
-            # Print message for each subject
-            tqdm.write(res["message"])
-            return res
+#     # Run parallel processing using run_parallel
+#     # Main process manages the progress bar
+#     with tqdm(total=len(metadata), desc="Preprocessing subjects") as pbar:
 
-        results = run_parallel(
-            tasks=metadata.to_dict("records"),
-            worker_fn=worker_wrapper,
-            max_workers=args.workers,
-            desc=None  # desc handled by outer tqdm
-        )
+#         def worker_wrapper(row):
+#             res = _process_subject(row, pbar=pbar)
+#             pbar.update(1)
+#             tqdm.write(res["message"])
+#             return res
 
-    # Summary
-    success = sum(1 for r in results if r["status"] == "success")
-    failed = len(results) - success
-    print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
+#         results = run_parallel(
+#             tasks=metadata.to_dict("records"),
+#             worker_fn=worker_wrapper,
+#             max_workers=args.workers,
+#             desc=None
+#         )
 
+#     # Summary
+#     success = sum(1 for r in results if r["status"] == "success")
+#     failed = len(results) - success
+#     print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
 
-def _process_subject(row):
+def _process_subject(row, pbar=None):
     """Process a single subject; returns result dict, no printing inside."""
     try:
         pipeline = PreprocessingPipeline()
         subject_id = row["subject_id"]
         func_path = Path(row["input_path"])  # Convert to Path object
-        
+
         # Extract site from input path - will get "OHSU" from the path structure
         site_name = func_path.parts[-5] if len(func_path.parts) >= 5 else row.get("site", "UnknownSite")
 
-        # Debug prints with absolute paths
-        print(f"\nProcessing subject {subject_id}")
-        print(f"Input path (absolute): {func_path.absolute()}")
-        print(f"Site: {site_name}")
-        
+        if pbar is not None:
+            pbar.set_postfix_str(f"Preprocessing: {subject_id}")
+
         # Verify file exists and is readable
         if not func_path.exists():
             raise FileNotFoundError(f"Input file not found: {func_path.absolute()}")
         if not func_path.is_file():
             raise ValueError(f"Input path is not a file: {func_path.absolute()}")
         
+
         # Check file extension
         if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
             raise ValueError(f"Invalid file extension. Expected .nii or .nii.gz, got: {func_path.suffix}")
@@ -762,18 +756,18 @@ def _process_subject(row):
         # Create output directory before processing
         subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
         subj_out.mkdir(parents=True, exist_ok=True)
-        print(f"Output directory (absolute): {subj_out.absolute()}")
 
         # Try to load the NIfTI file with explicit error handling
         try:
             test_load = nib.load(str(func_path.absolute()))
-            print(f"Successfully loaded input NIfTI file. Shape: {test_load.shape}")
         except Exception as e:
+            print(f"[ERROR] Failed to load NIfTI file: {func_path.absolute()}")
+            print(f"Reason: {str(e)}")
             raise ValueError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
 
         # Run preprocessing
         result = pipeline.process(str(func_path.absolute()), subject_id)
-        
+
         if result["status"] == "success":
             # Ensure processed_data is a Nifti1Image
             proc_data = result["processed_data"]
@@ -807,7 +801,7 @@ def _process_subject(row):
             }
         else:
             raise RuntimeError(f"Pipeline failed: {result.get('error', 'Unknown error')}")
-            
+
     except Exception as e:
         import traceback
         print(f"\nError processing subject {row.get('subject_id', 'unknown')}:")
@@ -822,6 +816,6 @@ def _process_subject(row):
             "error": str(e),
             "message": f"Failed: {str(e)}"
         }
-    
-if __name__ == "__main__":
-    run_batch_cli()
+
+# if __name__ == "__main__":
+#     run_batch_cli()

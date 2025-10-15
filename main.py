@@ -95,9 +95,18 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
             # Sequential processing with progress bar
             from tqdm import tqdm
             results = []
-            for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Processing subjects"):
-                result = _process_subject(row)
-                results.append(result)
+            with tqdm(total=len(metadata), desc="Preprocessing", unit="subj") as pbar:
+                for _, row in metadata.iterrows():
+                    # Show Site next to Subject in the postfix
+                    site = row.get("site", "UnknownSite")
+                    subject_id = row.get("subject_id", "unknown")
+                    pbar.set_postfix_str(f"Site: {site} | Subject: {subject_id}")
+
+                    # Call _process_subject and pass the progress bar if needed
+                    result = _process_subject(row, pbar=pbar)
+                    results.append(result)
+                    pbar.update(1)
+
 
         # Print summary
         success = sum(1 for r in results if r["status"] == "success")
@@ -110,17 +119,6 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         print(f"Error in preprocessing: {str(e)}")
         raise
 
-
-
-def run_feature_extraction(preproc_out: Path, features_out: Path):
-    print("\nRunning Feature Extraction...")
-    subprocess.run([
-        sys.executable,
-        "-m", "feature_extraction.parcellation_and_feature_extraction",
-        "--preproc-dir", str(preproc_out),
-        "--atlas", "schaefer200",
-        "--out-dir", str(features_out)
-    ], check=True)
 
 
 def run_training(feature_manifest: Path, demographics: Path, model_config: dict, training_config: dict):
