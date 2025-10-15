@@ -17,20 +17,8 @@ import warnings
 
 warnings.filterwarnings('ignore', category=RuntimeWarning)
 
+
 class PreprocessingPipeline:
-    """
-    Real preprocessing pipeline for rs-fMRI data.
-    Implements actual preprocessing steps (no placeholders).
-
-    Pipeline stages:
-    1. Data loading and validation
-    2. Motion correction (realignment to mean)
-    3. Slice timing correction
-    4. Spatial normalization to MNI152
-    5. Temporal filtering (bandpass)
-    6. Denoising (ICA-AROMA, aCompCor)
-    """
-
     def __init__(self, config: Optional[Dict[str, Any]] = None, device: Optional[torch.device] = None):
         if config is not None:
             self.config = self._merge_with_defaults(config)
@@ -40,6 +28,27 @@ class PreprocessingPipeline:
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.processing_log: List[Dict[str, Any]] = []
         self.subject_id: str = "unknown"
+
+    def _ensure_nifti(self, data, metadata, header):
+        """Ensure output is always a NIfTI image"""
+        if isinstance(data, nib.Nifti1Image):
+            return data
+        elif torch.is_tensor(data):
+            return nib.Nifti1Image(data.cpu().numpy(), metadata['affine'], header=header)
+        else:
+            return nib.Nifti1Image(np.array(data), metadata['affine'], header=header)
+
+    def _log_step(self, step_name: str, status: str, details: str = "") -> None:
+        """Log a processing step"""
+        self.processing_log.append({
+            'step': step_name,
+            'status': status,
+            'message': details,
+            'subject_id': self.subject_id
+        })
+        
+        if status in ['failed', 'warning']:
+            print(f"[{status.upper()}] {self.subject_id} - {step_name}: {details}")
 
     def _default_config(self) -> Dict[str, Any]:
         """Default preprocessing configuration"""
@@ -101,34 +110,35 @@ class PreprocessingPipeline:
         return merged
 
     def process(self, input_path: str, subject_id: str = None) -> Dict[str, Any]:
-        """Main processing function - executes the complete preprocessing pipeline"""
         self.processing_log = []
         self.subject_id = subject_id or Path(input_path).stem
 
         try:
-            # Stage 1: Data loading and validation
+            # Load original image for metadata
+            original_img = nib.load(input_path)
+            self.metadata = {
+                'affine': original_img.affine,
+                'header': original_img.header
+            }
+
+            # Load and validate data
             data, metadata = self._load_and_validate_data(input_path)
-
-            # Stage 2: Motion correction
-            data, motion_params = self._motion_correction(data, self.config['motion_correction'])
-
-            # Stage 3: Slice timing correction
-            data = self._slice_timing_correction(data, self.config['slice_timing_correction'], metadata)
-
-            # Stage 4: Spatial normalization (includes smoothing)
-            data = self._spatial_normalization(data, self.config['spatial_normalization'])
-
-            # Stage 5: Temporal filtering
-            data = self._temporal_filtering(data, self.config['temporal_filtering'], metadata)
-
-            # Stage 6: Denoising
-            data, confound_regressors = self._denoising(data, motion_params, self.config['denoising'])
+            
+            # Ensure each stage returns NIfTI
+            data_img = self._ensure_nifti(data, metadata, original_img.header)
+            
+            # Pipeline stages
+            data_img, motion_params = self._motion_correction(data_img, self.config['motion_correction'])
+            data_img = self._slice_timing_correction(data_img, self.config['slice_timing_correction'], metadata)
+            data_img = self._spatial_normalization(data_img, self.config['spatial_normalization'])
+            data_img = self._temporal_filtering(data_img, self.config['temporal_filtering'], metadata)
+            data_img, confound_regressors = self._denoising(data_img, motion_params, self.config['denoising'])
 
             # Generate brain mask
-            brain_mask = self._generate_brain_mask(data)
+            brain_mask = self._generate_brain_mask(data_img)
 
             return {
-                'processed_data': data,
+                'processed_data': data_img,  # Now guaranteed to be NIfTI
                 'confound_regressors': confound_regressors,
                 'brain_mask': brain_mask,
                 'motion_parameters': motion_params,
@@ -142,6 +152,8 @@ class PreprocessingPipeline:
         except Exception as e:
             self._log_step("pipeline_error", "failed", f"Pipeline failed: {str(e)}")
             return {'status': 'failed', 'error': str(e), 'subject_id': self.subject_id}
+
+
 
     # ----------------- Real Pipeline Stages -----------------
 
@@ -175,7 +187,22 @@ class PreprocessingPipeline:
             self._log_step("motion_correction", "skipped", "Disabled in config")
             return data_img, None
 
-        img_data = data_img.get_fdata()
+        # Get data and metadata
+        if isinstance(data_img, nib.Nifti1Image):
+            img_data = data_img.get_fdata()
+            affine = data_img.affine
+            header = data_img.header
+        else:
+            img_data = data_img.cpu().numpy() if torch.is_tensor(data_img) else np.array(data_img)
+            affine = self.metadata['affine']
+            header = None
+
+        # Convert PyTorch tensor to numpy if needed
+        if torch.is_tensor(data_img):
+            img_data = data_img.cpu().numpy()
+        else:
+            img_data = data_img.get_fdata()
+
         n_vols = img_data.shape[-1]
         
         # Create reference volume (mean or first volume)
@@ -201,11 +228,15 @@ class PreprocessingPipeline:
         # Process each volume
         for vol_idx in range(n_vols):
             current_vol = img_data[..., vol_idx]
-            
-            # Estimate motion parameters using center of mass
+            # Ensure current_vol is a numpy array
+            if torch.is_tensor(current_vol):
+                current_vol = current_vol.cpu().numpy()
             translation = self._estimate_translation(reference, current_vol)
-            
-            # Apply translation correction
+            # Ensure translation is a finite numpy array
+            translation = np.asarray(translation, dtype=np.float32)
+            if not np.all(np.isfinite(translation)):
+                translation = np.zeros_like(translation)
+            # Now apply shift
             corrected_vol = ndimage.shift(current_vol, translation, order=1, mode='nearest')
             corrected_data[..., vol_idx] = corrected_vol
             
@@ -222,8 +253,8 @@ class PreprocessingPipeline:
                 if displacement > params.get('max_displacement_mm', 3.0):
                     motion_params['excluded_volumes'].append(vol_idx)
 
-        # Create corrected nibabel image
-        corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
+        # Always return NIfTI
+        corrected_img = nib.Nifti1Image(corrected_data, affine, header)
 
         max_displacement = np.max(motion_params['displacement'])
         mean_displacement = np.mean(motion_params['displacement'])
@@ -235,8 +266,15 @@ class PreprocessingPipeline:
             self._log_step("motion_correction", "warning", 
                           f"Flagged {len(motion_params['excluded_volumes'])} high-motion volumes")
 
-        return corrected_img, motion_params
-
+    # Convert back to tensor if input was tensor
+        if torch.is_tensor(data_img):
+            corrected_data = torch.from_numpy(corrected_data).to(self.device)
+            return corrected_data, motion_params
+        else:
+            # Create corrected nibabel image
+            corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
+            return corrected_img, motion_params
+        
     def _estimate_translation(self, reference: np.ndarray, current: np.ndarray) -> np.ndarray:
         """Estimate translation between two volumes using center of mass"""
         try:
@@ -370,87 +408,90 @@ class PreprocessingPipeline:
 
         return normalized_img
 
-def _temporal_filtering(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
-    """Real temporal bandpass filtering with CUDA support"""
-    if not params.get('enabled', True):
-        self._log_step("temporal_filtering", "skipped", "Disabled in config")
-        return data_img
+    def _temporal_filtering(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
+        """Real temporal bandpass filtering with CUDA support"""
+        if not params.get('enabled', True):
+            self._log_step("temporal_filtering", "skipped", "Disabled in config")
+            return data_img
 
-    # Convert input to torch tensor if not already
-    img_data = torch.from_numpy(data_img.get_fdata()).to(self.device) if not torch.is_tensor(data_img) else data_img
+        # Get data and affine/header
+        if isinstance(data_img, nib.Nifti1Image):
+            img_data = torch.from_numpy(data_img.get_fdata()).to(self.device)
+            affine = data_img.affine
+            header = data_img.header
+        else:
+            img_data = data_img if torch.is_tensor(data_img) else torch.from_numpy(data_img).to(self.device)
+            affine = metadata['affine']
+            header = None
 
-    tr = metadata.get('tr', 2.0)
-    low_freq = params['low_freq']
-    high_freq = params['high_freq']
-    filter_order = params.get('filter_order', 4)
-    
-    # Nyquist frequency
-    nyquist = 1 / (2 * tr)
-    
-    # Normalize frequencies
-    low = low_freq / nyquist
-    high = high_freq / nyquist
-    
-    # Check frequency bounds
-    if high >= 1.0:
-        high = 0.99
-        self._log_step("temporal_filtering", "warning", 
-                      f"High frequency capped at {high * nyquist:.3f}Hz")
-    
-    # Design Butterworth bandpass filter
-    try:
-        b, a = signal.butter(filter_order, [low, high], btype='band')
-        b_torch = torch.from_numpy(b).to(self.device)
-        a_torch = torch.from_numpy(a).to(self.device)
-    except ValueError:
-        # Fallback to high-pass only if bandpass fails
-        b, a = signal.butter(filter_order, low, btype='high')
-        b_torch = torch.from_numpy(b).to(self.device)
-        a_torch = torch.from_numpy(a).to(self.device)
-        self._log_step("temporal_filtering", "warning", "Applied high-pass only")
-
-    # Get brain mask for filtering (avoid filtering background)
-    mean_img = torch.mean(img_data, dim=-1)
-    brain_mask = mean_img > torch.quantile(mean_img[mean_img > 0], 0.25)
-    
-    # Apply filter to each voxel on GPU
-    filtered_data = img_data.clone()
-    brain_voxels = torch.where(brain_mask)
-    total_voxels = len(brain_voxels[0])
-    
-    for i in range(total_voxels):
-        x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
-        voxel_ts = filtered_data[x, y, z, :]
+        tr = metadata.get('tr', 2.0)
+        low_freq = params['low_freq']
+        high_freq = params['high_freq']
+        filter_order = params.get('filter_order', 4)
         
-        if torch.any(voxel_ts != 0):
-            try:
-                # Detrend
-                t = torch.arange(voxel_ts.shape[0], dtype=torch.float32, device=self.device)
-                p = torch.polynomial.polynomial.polyfit(t, voxel_ts, deg=1)
-                trend = p[0] + p[1] * t
-                detrended = voxel_ts - trend
+        # Nyquist frequency
+        nyquist = 1 / (2 * tr)
+        
+        # Normalize frequencies
+        low = low_freq / nyquist
+        high = high_freq / nyquist
+        
+        # Check frequency bounds
+        if high >= 1.0:
+            high = 0.99
+            self._log_step("temporal_filtering", "warning", 
+                        f"High frequency capped at {high * nyquist:.3f}Hz")
+        
+        # Design Butterworth bandpass filter
+        try:
+            b, a = signal.butter(filter_order, [low, high], btype='band')
+            b_torch = torch.from_numpy(b).to(self.device)
+            a_torch = torch.from_numpy(a).to(self.device)
+        except ValueError:
+            # Fallback to high-pass only if bandpass fails
+            b, a = signal.butter(filter_order, low, btype='high')
+            b_torch = torch.from_numpy(b).to(self.device)
+            a_torch = torch.from_numpy(a).to(self.device)
+            self._log_step("temporal_filtering", "warning", "Applied high-pass only")
 
-                # FFT-based filtering
-                fft = torch.fft.rfft(detrended)
-                freqs = torch.fft.rfftfreq(voxel_ts.shape[0], d=tr)
-                mask = (freqs >= low_freq) & (freqs <= high_freq)
-                fft = fft * mask.to(self.device)
-                filtered = torch.fft.irfft(fft, n=voxel_ts.shape[0])
-                
-                # Add trend back
-                filtered_data[x, y, z, :] = filtered + trend
-            except:
-                # Keep original if filtering fails
-                continue
+        # Get brain mask for filtering (avoid filtering background)
+        mean_img = torch.mean(img_data, dim=-1)
+        brain_mask = mean_img > torch.quantile(mean_img[mean_img > 0], 0.25)
+        
+        # Apply filter to each voxel on GPU
+        filtered_data = img_data.clone()
+        brain_voxels = torch.where(brain_mask)
+        total_voxels = len(brain_voxels[0])
+        
+        for i in range(total_voxels):
+            x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
+            voxel_ts = filtered_data[x, y, z, :]
+            
+            if torch.any(voxel_ts != 0):
+                try:
+                    # Detrend
+                    t = torch.arange(voxel_ts.shape[0], dtype=torch.float32, device=self.device)
+                    p = torch.polynomial.polynomial.polyfit(t, voxel_ts, deg=1)
+                    trend = p[0] + p[1] * t
+                    detrended = voxel_ts - trend
 
-    # Convert back to CPU and create new image
-    filtered_array = filtered_data.cpu().numpy()
-    filtered_img = nib.Nifti1Image(filtered_array, data_img.affine, data_img.header)
-    
-    self._log_step("temporal_filtering", "success", 
-                   f"Bandpass {low_freq:.3f}-{high_freq:.3f}Hz, filtered {total_voxels} brain voxels")
-    
-    return filtered_img
+                    # FFT-based filtering
+                    fft = torch.fft.rfft(detrended)
+                    freqs = torch.fft.rfftfreq(voxel_ts.shape[0], d=tr)
+                    mask = (freqs >= low_freq) & (freqs <= high_freq)
+                    fft = fft * mask.to(self.device)
+                    filtered = torch.fft.irfft(fft, n=voxel_ts.shape[0])
+                    
+                    # Add trend back
+                    filtered_data[x, y, z, :] = filtered + trend
+                except:
+                    # Keep original if filtering fails
+                    continue
+
+        # Always return NIfTI
+        filtered_array = filtered_data.cpu().numpy()
+        filtered_img = nib.Nifti1Image(filtered_array, affine, header)
+        return filtered_img
 
     def _denoising(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 
                    params: Dict[str, Any]) -> tuple:
@@ -695,43 +736,92 @@ def run_batch_cli():
 
 def _process_subject(row):
     """Process a single subject; returns result dict, no printing inside."""
-    pipeline = PreprocessingPipeline()
-    subject_id = row["subject_id"]
-    func_path = row["input_path"]
-    site_name = row.get("site", "UnknownSite")
-
-    result = pipeline.process(func_path, subject_id)
-
-    # Create site-level folder
-    subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
-    subj_out.mkdir(parents=True, exist_ok=True)
-
-    if result["status"] == "success":
-        # Save as NIfTI files
-        nib.save(result["processed_data"], subj_out / "func_preproc.nii.gz")
-        nib.save(nib.Nifti1Image(result["brain_mask"].astype(np.uint8),
-                                result["processed_data"].affine),
-                subj_out / "mask.nii.gz")
+    try:
+        pipeline = PreprocessingPipeline()
+        subject_id = row["subject_id"]
+        func_path = Path(row["input_path"])  # Convert to Path object
         
-        # Save confounds as CSV instead of NPY
-        pd.DataFrame(result["confound_regressors"]).to_csv(
-            subj_out / "confounds.csv", index=False
-        )
+        # Extract site from input path - will get "OHSU" from the path structure
+        site_name = func_path.parts[-5] if len(func_path.parts) >= 5 else row.get("site", "UnknownSite")
+
+        # Debug prints with absolute paths
+        print(f"\nProcessing subject {subject_id}")
+        print(f"Input path (absolute): {func_path.absolute()}")
+        print(f"Site: {site_name}")
         
-        return {
-            "status": "success",
-            "subject_id": subject_id,
-            "site": site_name,
-            "message": f"Preprocessed {subject_id} (Site: {site_name})"
-        }
-    else:
+        # Verify file exists and is readable
+        if not func_path.exists():
+            raise FileNotFoundError(f"Input file not found: {func_path.absolute()}")
+        if not func_path.is_file():
+            raise ValueError(f"Input path is not a file: {func_path.absolute()}")
+        
+        # Check file extension
+        if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
+            raise ValueError(f"Invalid file extension. Expected .nii or .nii.gz, got: {func_path.suffix}")
+
+        # Create output directory before processing
+        subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
+        subj_out.mkdir(parents=True, exist_ok=True)
+        print(f"Output directory (absolute): {subj_out.absolute()}")
+
+        # Try to load the NIfTI file with explicit error handling
+        try:
+            test_load = nib.load(str(func_path.absolute()))
+            print(f"Successfully loaded input NIfTI file. Shape: {test_load.shape}")
+        except Exception as e:
+            raise ValueError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
+
+        # Run preprocessing
+        result = pipeline.process(str(func_path.absolute()), subject_id)
+        
+        if result["status"] == "success":
+            # Ensure processed_data is a Nifti1Image
+            proc_data = result["processed_data"]
+            if torch.is_tensor(proc_data):
+                proc_array = proc_data.cpu().numpy()
+                proc_nifti = nib.Nifti1Image(proc_array, np.eye(4))  # Use identity affine if unknown
+            elif isinstance(proc_data, nib.Nifti1Image):
+                proc_nifti = proc_data
+            else:
+                # fallback
+                proc_nifti = nib.Nifti1Image(np.array(proc_data), np.eye(4))
+
+            # Save preprocessed functional image
+            nib.save(proc_nifti, subj_out / "func_preproc.nii.gz")
+
+            # Save brain mask using the same affine as proc_nifti
+            mask_nifti = nib.Nifti1Image(result["brain_mask"].astype(np.uint8),
+                                        proc_nifti.affine)
+            nib.save(mask_nifti, subj_out / "mask.nii.gz")
+
+            # Save confound regressors
+            pd.DataFrame(result["confound_regressors"]).to_csv(
+                subj_out / "confounds.csv", index=False
+            )
+
+            return {
+                "status": "success",
+                "subject_id": subject_id,
+                "site": site_name,
+                "message": f"Preprocessed {subject_id} (Site: {site_name})"
+            }
+        else:
+            raise RuntimeError(f"Pipeline failed: {result.get('error', 'Unknown error')}")
+            
+    except Exception as e:
+        import traceback
+        print(f"\nError processing subject {row.get('subject_id', 'unknown')}:")
+        print(f"Error type: {type(e).__name__}")
+        print(f"Error message: {str(e)}")
+        print("Full traceback:")
+        print(traceback.format_exc())
         return {
             "status": "failed",
-            "subject_id": subject_id,
-            "site": site_name,
-            "error": result.get("error", "Unknown error"),
-            "message": f"Failed {subject_id} (Site: {site_name})"
+            "subject_id": row.get("subject_id", "unknown"),
+            "site": row.get("site", "UnknownSite"),
+            "error": str(e),
+            "message": f"Failed: {str(e)}"
         }
-
+    
 if __name__ == "__main__":
     run_batch_cli()

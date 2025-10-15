@@ -17,6 +17,7 @@ import numpy as np
 from preprocessing import PreprocessingPipeline
 
 from feature_extraction import SchaeferParcellation, run_feature_extraction_stage
+from preprocessing.preprocess import _process_subject
 from utils import run_parallel
 from utils import DataDiscovery
 from models import GNNSTANHybrid
@@ -68,52 +69,46 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
     """Run preprocessing for all subjects"""
     print("\nRunning Preprocessing...")
     
-    # Use provided device or default
     device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     if torch.cuda.is_available():
         print(f"CUDA available: Using GPU {torch.cuda.get_device_name()}")
     
-    # Rest of the existing function remains the same
     try:
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
+
+        # Add output directory to metadata
+        metadata['out_dir'] = str(preproc_out)
+
+        # Create output directory
+        preproc_out.mkdir(parents=True, exist_ok=True)
+
+        if parallel:
+            results = run_parallel(
+                tasks=metadata.to_dict('records'),
+                worker_fn=lambda row: _process_subject(row),
+                max_workers=None  # Will use all available CPU cores
+            )
+        else:
+            # Sequential processing with progress bar
+            from tqdm import tqdm
+            results = []
+            for _, row in tqdm(metadata.iterrows(), total=len(metadata), desc="Processing subjects"):
+                result = _process_subject(row)
+                results.append(result)
+
+        # Print summary
+        success = sum(1 for r in results if r["status"] == "success")
+        failed = len(results) - success
+        print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
+        
+        return results
+
     except Exception as e:
-        print(f"Error loading metadata: {e}")
-        return
-
-    # Pass device to pipeline initialization
-    def _process_subject(row):
-        pipeline = PreprocessingPipeline(device=device) 
-        try:
-            subject_id = row["subject_id"]
-            func_path = row["input_path"]
-            site = row.get("dataset", "unknown").lower()
-
-            result = pipeline.process(func_path, subject_id)
-            
-            # Create site-specific output directory
-            site_dir = preproc_out / site
-            subj_out = site_dir / subject_id
-            subj_out.mkdir(parents=True, exist_ok=True)
-
-            if result["status"] == "success":
-                # Move data back to CPU before saving
-                processed_data = result["processed_data"].cpu().numpy() if torch.is_tensor(result["processed_data"]) else result["processed_data"]
-                brain_mask = result["brain_mask"].cpu().numpy() if torch.is_tensor(result["brain_mask"]) else result["brain_mask"]
-                confounds = result["confound_regressors"]
-                
-                np.save(subj_out / "func_preproc.npy", processed_data)
-                np.save(subj_out / "mask.npy", brain_mask)
-                np.save(subj_out / "confounds.npy", confounds)
-                return {"status": "success", "subject_id": subject_id, "site": site}
-            else:
-                return {"status": "failed", "subject_id": subject_id, "site": site, 
-                       "error": result.get("error")}
-        except Exception as e:
-            return {"status": "failed", "subject_id": row.get("subject_id", "unknown"), 
-                   "site": row.get("dataset", "unknown"), "error": str(e)}
+        print(f"Error in preprocessing: {str(e)}")
+        raise
 
 
 
@@ -170,6 +165,12 @@ if __name__ == "__main__":
                        help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
                        help="Run preprocessing in parallel")
+    parser.add_argument(
+        "--no-parallel",
+        action="store_false",
+        dest="parallel",
+        help="Disable parallel processing"
+    )
     parser.add_argument("--no-cuda", action="store_true",
                        help="Disable CUDA even if available")
     args = parser.parse_args()
