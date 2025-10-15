@@ -412,70 +412,84 @@ class PreprocessingPipeline:
             self._log_step("temporal_filtering", "skipped", "Disabled in config")
             return data_img
 
-        # Convert to tensor if needed and ensure positive strides
+        # Get data and affine/header
         if isinstance(data_img, nib.Nifti1Image):
-            # Make a contiguous copy to ensure positive strides
-            img_data = torch.from_numpy(np.ascontiguousarray(data_img.get_fdata())).to(self.device)
+            img_data = torch.from_numpy(data_img.get_fdata()).to(self.device)
             affine = data_img.affine
             header = data_img.header
         else:
-            # Make contiguous copy if input is tensor
-            if torch.is_tensor(data_img):
-                img_data = data_img.contiguous()
-            else:
-                img_data = torch.from_numpy(np.ascontiguousarray(data_img)).to(self.device)
+            img_data = data_img if torch.is_tensor(data_img) else torch.from_numpy(data_img).to(self.device)
             affine = metadata['affine']
             header = None
 
-        # Get dimensions
-        *spatial_dims, n_timepoints = img_data.shape
-        
-        # Process each voxel
-        filtered_data = img_data.clone()
-        for x in range(spatial_dims[0]):
-            for y in range(spatial_dims[1]):
-                for z in range(spatial_dims[2]):
-                    voxel_ts = img_data[x, y, z, :]
-                    # Only filter non-zero timeseries
-                    if torch.any(voxel_ts != 0):
-                        filtered_data[x, y, z, :] = self._apply_bandpass(voxel_ts, params, metadata)
-
-    # Convert back to NIfTI
-        filtered_array = filtered_data.cpu().numpy()
-        filtered_img = nib.Nifti1Image(filtered_array, affine, header)
-        
-        return filtered_img
-
-    def _apply_bandpass(self, timeseries: torch.Tensor, params: Dict[str, Any], metadata: Dict[str, Any]) -> torch.Tensor:
-        """Apply bandpass filtering to a single voxel timeseries"""
-        # Get parameters
         tr = metadata.get('tr', 2.0)
-        low_freq = params.get('low_freq', 0.009)  # Hz
-        high_freq = params.get('high_freq', 0.08)  # Hz
+        low_freq = params['low_freq']
+        high_freq = params['high_freq']
         filter_order = params.get('filter_order', 4)
         
-        # Convert to numpy for filtering
-        if torch.is_tensor(timeseries):
-            ts_numpy = timeseries.cpu().numpy()
-        else:
-            ts_numpy = timeseries
-
-        # Sampling frequency in Hz
-        fs = 1.0 / tr
+        # Nyquist frequency
+        nyquist = 1 / (2 * tr)
         
-        # Normalize frequencies by Nyquist frequency
-        nyquist = fs / 2.0
+        # Normalize frequencies
         low = low_freq / nyquist
         high = high_freq / nyquist
         
+        # Check frequency bounds
+        if high >= 1.0:
+            high = 0.99
+            self._log_step("temporal_filtering", "warning", 
+                        f"High frequency capped at {high * nyquist:.3f}Hz")
+        
         # Design Butterworth bandpass filter
-        b, a = signal.butter(filter_order, [low, high], btype='band')
+        try:
+            b, a = signal.butter(filter_order, [low, high], btype='band')
+            b_torch = torch.from_numpy(b).to(self.device)
+            a_torch = torch.from_numpy(a).to(self.device)
+        except ValueError:
+            # Fallback to high-pass only if bandpass fails
+            b, a = signal.butter(filter_order, low, btype='high')
+            b_torch = torch.from_numpy(b).to(self.device)
+            a_torch = torch.from_numpy(a).to(self.device)
+            self._log_step("temporal_filtering", "warning", "Applied high-pass only")
+
+        # Get brain mask for filtering (avoid filtering background)
+        mean_img = torch.mean(img_data, dim=-1)
+        brain_mask = mean_img > torch.quantile(mean_img[mean_img > 0], 0.25)
         
-        # Apply filter (zero-phase filtering)
-        filtered = signal.filtfilt(b, a, ts_numpy)
+        # Apply filter to each voxel on GPU
+        filtered_data = img_data.clone()
+        brain_voxels = torch.where(brain_mask)
+        total_voxels = len(brain_voxels[0])
         
-        # Convert back to tensor
-        return torch.from_numpy(filtered).to(self.device)
+        for i in range(total_voxels):
+            x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
+            voxel_ts = filtered_data[x, y, z, :]
+            
+            if torch.any(voxel_ts != 0):
+                try:
+                    # Detrend
+                    t = torch.arange(voxel_ts.shape[0], dtype=torch.float32, device=self.device)
+                    p = torch.polynomial.polynomial.polyfit(t, voxel_ts, deg=1)
+                    trend = p[0] + p[1] * t
+                    detrended = voxel_ts - trend
+
+                    # FFT-based filtering
+                    fft = torch.fft.rfft(detrended)
+                    freqs = torch.fft.rfftfreq(voxel_ts.shape[0], d=tr)
+                    mask = (freqs >= low_freq) & (freqs <= high_freq)
+                    fft = fft * mask.to(self.device)
+                    filtered = torch.fft.irfft(fft, n=voxel_ts.shape[0])
+                    
+                    # Add trend back
+                    filtered_data[x, y, z, :] = filtered + trend
+                except:
+                    # Keep original if filtering fails
+                    continue
+
+        # Always return NIfTI
+        filtered_array = filtered_data.cpu().numpy()
+        filtered_img = nib.Nifti1Image(filtered_array, affine, header)
+        return filtered_img
 
     def _denoising(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 
                    params: Dict[str, Any]) -> tuple:
@@ -804,3 +818,5 @@ def _process_subject(row, pbar=None):
             "message": f"Failed: {str(e)}"
         }
 
+# if __name__ == "__main__":
+#     run_batch_cli()

@@ -15,7 +15,7 @@ from tqdm import tqdm
 import pandas as pd
 import numpy as np
 from preprocessing import PreprocessingPipeline
-
+from training import DataSplitter
 from feature_extraction import SchaeferParcellation, run_feature_extraction_stage
 from preprocessing.preprocess import _process_subject
 from utils import run_parallel
@@ -23,6 +23,7 @@ from utils import DataDiscovery
 from models import GNNSTANHybrid
 from training import TrainingOptimizationModule
 from evaluation import ADHDModelEvaluator
+from typing import Dict, Any, List
 
 # --- Configuration ---
 RAW_DIR = Path("./data/raw")
@@ -32,6 +33,14 @@ TRAINED_OUT = Path("./data/trained")
 METADATA_OUT = RAW_DIR / "subjects_metadata.csv"
 DEMOGRAPHICS = RAW_DIR / "demographics.csv"
 FEATURE_MANIFEST = FEATURES_OUT / "feature_manifest.csv"
+SPLITS_DIR = Path("./data/splits")
+
+SPLIT_CONFIG = {
+    'train_size': 0.8,
+    'n_splits': 5,
+    'random_state': 42,
+    'stratify': True
+}
 
 MODEL_CONFIG = {
     'n_rois': 200,
@@ -121,30 +130,56 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
 
 
 
-def run_training(feature_manifest: Path, demographics: Path, model_config: dict, training_config: dict):
+def run_training(feature_manifest: Path, demographics: Path, 
+                model_config: dict, training_config: dict,
+                splits_path: Path):
+    if not feature_manifest.exists():
+        raise FileNotFoundError(f"Feature manifest not found: {feature_manifest}")
+    if not splits_path.exists():
+        raise FileNotFoundError(f"Splits file not found: {splits_path}")
+
     print("\nLoading data for training...")
+    
+    # Load splits
+    splitter = DataSplitter()
+    splits = splitter.load_splits(splits_path)
+    
     # Load feature data
-    from utils import load_metadata
-    feature_data = load_metadata(feature_manifest)
-
-    fc_matrices = feature_data['fc_matrices']
-    roi_timeseries = feature_data['roi_timeseries']
-    labels = feature_data['labels']
-    sites = feature_data['sites']
-
-    # Initialize trainer
-    trainer = TrainingOptimizationModule(model_config, training_config)
-    results = trainer.run_training(fc_matrices, roi_timeseries, labels, sites)
+    feature_data = pd.read_csv(feature_manifest)
+    
+    # Get train/test sets using splits
+    train_data = feature_data.iloc[splits['train_idx']]
+    test_data = feature_data.iloc[splits['test_idx']]
+    
+    # Initialize trainer with splits
+    trainer = TrainingOptimizationModule(
+        model_config=model_config,
+        training_config=training_config
+    )
+    
+    # Run training with cross-validation splits
+    results = trainer.run_training(
+        train_data=train_data,
+        test_data=test_data,
+        cv_splits=splits['cv_splits']
+    )
+    
     print("\nTraining complete.")
 
     # Evaluate trained model
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = GNNSTANHybrid(model_config).to(device)
-    if training_config.get('pretrained_weights'):
-        model.load_state_dict(torch.load(training_config['pretrained_weights'], map_location=device))
-
-    evaluator = ADHDModelEvaluator(model, device=device)
-    metrics = evaluator.evaluate(fc_matrices, roi_timeseries, labels, sites)
+    evaluator = ADHDModelEvaluator(
+        model_path=trainer.best_model_path,
+        model_config=model_config,
+        device=DEVICE
+    )
+    
+    # Evaluate using the test data
+    metrics = evaluator.evaluate(
+        fc_matrices=test_data['fc_matrices'].values,
+        roi_timeseries=test_data['timeseries'].values,
+        labels=test_data['diagnosis'].values,
+        sites=test_data.get('site', None)
+    )
 
     print("\nEvaluation Metrics:")
     for k, v in metrics.items():
@@ -154,11 +189,38 @@ def run_training(feature_manifest: Path, demographics: Path, model_config: dict,
             print(f"{k}: {v}")
 
 
+def run_splitting(
+    feature_manifest: Path, 
+    splits_dir: Path, 
+    split_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Create dataset splits for training"""
+    try:
+        print("\nCreating dataset splits...")
+        
+        splitter = DataSplitter(
+            train_size=split_config['train_size'],
+            n_splits=split_config['n_splits'],
+            random_state=split_config['random_state'],
+            stratify=split_config['stratify']
+        )
+        
+        splits = splitter.split_dataset(
+            features_path=feature_manifest,
+            splits_dir=splits_dir
+        )
+        
+        return splits
+    except Exception as e:
+        print(f"Error in splitting: {str(e)}")
+        raise
+
+
 # --- Main execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
     parser.add_argument("--stage", type=str,
-                       choices=["preprocessing", "features", "training", "full"],
+                       choices=["preprocessing", "features", "split", "training", "full"],
                        default="full",
                        help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
@@ -177,21 +239,41 @@ if __name__ == "__main__":
     DEVICE = torch.device('cpu') if args.no_cuda else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {DEVICE}")
 
-    # Preprocessing call to pass device
-    if args.stage in ["preprocessing", "full"]:
-        run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
+    # Create necessary directories
+    for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
+        dir_path.mkdir(parents=True, exist_ok=True)
 
-    if args.stage in ["features", "full"]:
-        parcellation = SchaeferParcellation()
-        parcellation.load_parcellation()
+    # Ensure metadata exists
+    ensure_metadata(RAW_DIR, METADATA_OUT)
 
-        run_feature_extraction_stage(
-            metadata_csv=METADATA_OUT,
-            preproc_dir=PREPROC_OUT,
-            feature_out_dir=FEATURES_OUT,
-            atlas_labels=parcellation.roi_labels,
-            parallel=args.parallel
-        )
+    # Run pipeline stages
+    try:
+        if args.stage in ["preprocessing", "full"]:
+            run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
 
-    if args.stage in ["training", "full"]:
-        run_training(FEATURE_MANIFEST, DEMOGRAPHICS, MODEL_CONFIG, TRAINING_CONFIG)
+        if args.stage in ["features", "full"]:
+            parcellation = SchaeferParcellation()
+            parcellation.load_parcellation()
+
+            run_feature_extraction_stage(
+                metadata_csv=METADATA_OUT,
+                preproc_dir=PREPROC_OUT,
+                feature_out_dir=FEATURES_OUT,
+                atlas_labels=parcellation.roi_labels,
+                parallel=args.parallel
+            )
+
+        if args.stage in ["split", "training", "full"]:
+            splits = run_splitting(FEATURE_MANIFEST, SPLITS_DIR, SPLIT_CONFIG)
+
+        if args.stage in ["training", "full"]:
+            run_training(
+                feature_manifest=FEATURE_MANIFEST,
+                demographics=DEMOGRAPHICS,
+                model_config=MODEL_CONFIG,
+                training_config=TRAINING_CONFIG,
+                splits_path=SPLITS_DIR / "splits.json"
+            )
+    except Exception as e:
+        print(f"Pipeline failed: {str(e)}")
+        sys.exit(1)
