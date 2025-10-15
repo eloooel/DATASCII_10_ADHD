@@ -132,11 +132,15 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
 
 def run_training(feature_manifest: Path, demographics: Path, 
                 model_config: dict, training_config: dict,
-                splits_path: Path):
+                splits_path: Path, device: torch.device = None):
+    """Run training and evaluation with the specified configuration"""
     if not feature_manifest.exists():
         raise FileNotFoundError(f"Feature manifest not found: {feature_manifest}")
     if not splits_path.exists():
         raise FileNotFoundError(f"Splits file not found: {splits_path}")
+
+    # Use global DEVICE if none provided
+    device = device or DEVICE
 
     print("\nLoading data for training...")
     
@@ -170,7 +174,7 @@ def run_training(feature_manifest: Path, demographics: Path,
     evaluator = ADHDModelEvaluator(
         model_path=trainer.best_model_path,
         model_config=model_config,
-        device=DEVICE
+        device=device
     )
     
     # Evaluate using the test data
@@ -272,7 +276,8 @@ if __name__ == "__main__":
                 demographics=DEMOGRAPHICS,
                 model_config=MODEL_CONFIG,
                 training_config=TRAINING_CONFIG,
-                splits_path=SPLITS_DIR / "splits.json"
+                splits_path=SPLITS_DIR / "splits.json",
+                device=DEVICE  # Pass the global DEVICE
             )
     except Exception as e:
         print(f"Pipeline failed: {str(e)}")
