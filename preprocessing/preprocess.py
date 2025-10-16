@@ -23,6 +23,7 @@ class PreprocessingPipeline:
         else:
             self.config = self._default_config()
             
+        # Only print device info if explicitly requested
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.processing_log: List[Dict[str, Any]] = []
         self.subject_id: str = "unknown"
@@ -732,7 +733,12 @@ class PreprocessingPipeline:
 def _process_subject(row, pbar=None):
     """Process a single subject; returns result dict, no printing inside."""
     try:
-        pipeline = PreprocessingPipeline()
+        # Get device from row if available, otherwise use default
+        device = row.get('device', None)
+        if device and isinstance(device, str):
+            device = torch.device(device)
+        
+        pipeline = PreprocessingPipeline(device=device)
         subject_id = row["subject_id"]
         func_path = Path(row["input_path"])  # Convert to Path object
 

@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional
 import logging
 from pathlib import Path
 from .dataset import ADHDDataset
-
+from .data_splitter import DataSplitter
 from models import GNNSTANHybrid
 from optimization import FocalLoss, EarlyStopping
 

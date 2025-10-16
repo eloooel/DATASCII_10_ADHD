@@ -7,14 +7,17 @@ from typing import List, Callable, Any, Dict
 def _safe_worker_wrapper(worker_fn: Callable[[Any], Any], task: Any) -> Dict[str, Any]:
     """
     Wrapper that safely imports necessary dependencies inside each worker process.
-    Prevents NameError issues (e.g., 'np' undefined) when multiprocessing reloads the module.
     """
-    # Local imports for isolation
-    import numpy as np  # ensures np exists in all child processes
-    import torch        # optional but useful if preprocessing uses torch tensors
+    # Add these imports at the start of the function
+    import torch
     import nibabel as nib
-    import os
-
+    import numpy as np
+    
+    # Initialize CUDA device for each worker
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if isinstance(task, dict):
+        task['device'] = device  # Pass device to the task
+    
     try:
         result = worker_fn(task)
         return result

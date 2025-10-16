@@ -137,47 +137,71 @@ class FeatureExtractor:
 
 def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list):
     """Worker function for feature extraction"""
-
-    
-    subject_id = row["subject_id"]
-    site = row.get("dataset", "unknown").lower()
-    
-    # Update paths for NIfTI files
-    func_path = preproc_dir / row['site'] / row['subject_id'] / "func_preproc.nii.gz"  # Changed from .npy
-    mask_path = preproc_dir / row['site'] / row['subject_id'] / "mask.nii.gz"          # Changed from .npy
-    confounds_path = preproc_dir / row['site'] / row['subject_id'] / "confounds.csv"    # Changed from .npy
-
-    # Create site-specific feature output directory
-    site_feature_dir = feature_out_dir / site
-    site_feature_dir.mkdir(parents=True, exist_ok=True)
-
-    # Check preprocessing existence
-    if not func_path.exists() or not mask_path.exists():
-        return {"subject_id": subject_id, "site": site, 
-                "status": "failed", "error": "Missing preprocessed files"}
-
-    # Load NIfTI data
     try:
-        func_img = nib.load(func_path)
-        mask_img = nib.load(mask_path)
+        subject_id = row["subject_id"]
+        # Fix site extraction - get it from the dataset column or input path
+        site = row.get("dataset", row.get("site", Path(row["input_path"]).parts[-5])).lower()
         
-        func_data = func_img.get_fdata()
-        mask_data = mask_img.get_fdata()
-        
-        # Rest of feature extraction remains the same
-        parcellation = SchaeferParcellation()
-        parcellation.load_parcellation()
-        roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
+        # Update paths for NIfTI files with correct site handling
+        func_path = preproc_dir / site / subject_id / "func_preproc.nii.gz"
+        mask_path = preproc_dir / site / subject_id / "mask.nii.gz"
+        confounds_path = preproc_dir / site / subject_id / "confounds.csv"
 
-        # Save features (now converting to NPY/CSV for downstream analysis)
-        extractor = FeatureExtractor(site_feature_dir, atlas_labels)
-        outputs = extractor.process_subject(subject_id, roi_timeseries)
+        # Create site-specific feature output directory
+        site_feature_dir = feature_out_dir / site
+        site_feature_dir.mkdir(parents=True, exist_ok=True)
 
-        return {"subject_id": subject_id, "site": site, "status": "success", "outputs": outputs}
-        
+        # Check preprocessing existence
+        if not func_path.exists():
+            return {
+                "status": "failed", 
+                "subject_id": subject_id, 
+                "site": site,
+                "error": f"Missing preprocessed file: {func_path}"
+            }
+
+        if not mask_path.exists():
+            return {
+                "status": "failed", 
+                "subject_id": subject_id, 
+                "site": site,
+                "error": f"Missing mask file: {mask_path}"
+            }
+
+        # Load NIfTI data
+        try:
+            func_img = nib.load(func_path)
+            mask_img = nib.load(mask_path)
+            
+            func_data = func_img.get_fdata()
+            mask_data = mask_img.get_fdata()
+            
+            # Rest of feature extraction remains the same
+            parcellation = SchaeferParcellation()
+            parcellation.load_parcellation()
+            roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
+
+            # Save features (now converting to NPY/CSV for downstream analysis)
+            extractor = FeatureExtractor(site_feature_dir, atlas_labels)
+            outputs = extractor.process_subject(subject_id, roi_timeseries)
+
+            return {"subject_id": subject_id, "site": site, "status": "success", "outputs": outputs}
+            
+        except Exception as e:
+            return {
+                "status": "failed",
+                "subject_id": subject_id,
+                "site": site,
+                "error": str(e)
+            }
+
     except Exception as e:
-        return {"subject_id": subject_id, "site": site, 
-                "status": "failed", "error": str(e)}
+        return {
+            "status": "failed",
+            "subject_id": subject_id,
+            "site": site,
+            "error": str(e)
+        }
 
 
 def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path,

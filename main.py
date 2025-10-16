@@ -60,7 +60,6 @@ TRAINING_CONFIG = {
 }
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {DEVICE}")
 
 # --- Pipeline stages ---
 def ensure_metadata(data_dir: Path, metadata_out: Path):
@@ -78,27 +77,19 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
     """Run preprocessing for all subjects"""
     print("\nRunning Preprocessing...")
     
-    device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
-    
-    if torch.cuda.is_available():
-        print(f"CUDA available: Using GPU {torch.cuda.get_device_name()}")
-    
     try:
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
-        # Add output directory to metadata
-        metadata['out_dir'] = str(preproc_out)
-
-        # Create output directory
-        preproc_out.mkdir(parents=True, exist_ok=True)
-
+        # Add device and output directory to metadata
+        metadata['device'] = str(device)
+        metadata['out_dir'] = str(preproc_out)  # Add this line
+        
         if parallel:
             results = run_parallel(
                 tasks=metadata.to_dict('records'),
-                worker_fn=lambda row: _process_subject(row),
-                max_workers=None  # Will use all available CPU cores
+                worker_fn=_process_subject,
+                max_workers=None
             )
         else:
             # Sequential processing with progress bar
@@ -241,7 +232,10 @@ if __name__ == "__main__":
 
     # Device configuration based on args
     DEVICE = torch.device('cpu') if args.no_cuda else torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {DEVICE}")
+    if DEVICE.type == 'cuda':
+        print(f"Using device: {DEVICE} ({torch.cuda.get_device_name()})")
+    else:
+        print(f"Using device: {DEVICE}")
 
     # Create necessary directories
     for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
@@ -277,7 +271,7 @@ if __name__ == "__main__":
                 model_config=MODEL_CONFIG,
                 training_config=TRAINING_CONFIG,
                 splits_path=SPLITS_DIR / "splits.json",
-                device=DEVICE  # Pass the global DEVICE
+                device=DEVICE
             )
     except Exception as e:
         print(f"Pipeline failed: {str(e)}")
