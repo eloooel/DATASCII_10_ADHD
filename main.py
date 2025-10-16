@@ -28,6 +28,7 @@ from typing import Dict, Any, List
 # --- Configuration ---
 RAW_DIR = Path("./data/raw")
 PREPROC_OUT = Path("./data/preprocessed")
+PARCELLATED_OUT = Path("./data/parcellated")
 FEATURES_OUT = Path("./data/features")
 TRAINED_OUT = Path("./data/trained")
 METADATA_OUT = RAW_DIR / "subjects_metadata.csv"
@@ -76,15 +77,15 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
 def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True, device: torch.device = None):
     """Run preprocessing for all subjects"""
     print("\nRunning Preprocessing...")
-    
+
     try:
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
         # Add device and output directory to metadata
         metadata['device'] = str(device)
-        metadata['out_dir'] = str(preproc_out)  # Add this line
-        
+        metadata['out_dir'] = str(preproc_out)
+
         if parallel:
             results = run_parallel(
                 tasks=metadata.to_dict('records'),
@@ -120,6 +121,64 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         raise
 
 
+def run_feature_extraction(metadata_out: Path, preproc_out: Path, 
+                         parcellated_out: Path, feature_out_dir: Path, 
+                         parallel: bool = True):
+    """Run feature extraction stage of the pipeline"""
+    print("\nRunning Feature Extraction...")
+    
+    try:
+        # Initialize parcellation
+        parcellation = SchaeferParcellation()
+        parcellation.load_parcellation()
+        
+        # Run feature extraction with parcellation step
+        results = run_feature_extraction_stage(
+            metadata_csv=metadata_out,
+            preproc_dir=preproc_out,
+            parcellated_dir=parcellated_out,  # Add intermediate directory
+            feature_out_dir=feature_out_dir,
+            atlas_labels=parcellation.roi_labels,
+            parallel=parallel
+        )
+        
+        # Print summary
+        success = sum(1 for r in results if r["status"] == "success")
+        failed = len(results) - success
+        print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
+        
+        return results
+        
+    except Exception as e:
+        print(f"Error in feature extraction: {str(e)}")
+        raise
+
+
+def run_splitting(
+    feature_manifest: Path, 
+    splits_dir: Path, 
+    split_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Create dataset splits for training"""
+    try:
+        print("\nCreating dataset splits...")
+        
+        splitter = DataSplitter(
+            train_size=split_config['train_size'],
+            n_splits=split_config['n_splits'],
+            random_state=split_config['random_state'],
+            stratify=split_config['stratify']
+        )
+        
+        splits = splitter.split_dataset(
+            features_path=feature_manifest,
+            splits_dir=splits_dir
+        )
+        
+        return splits
+    except Exception as e:
+        print(f"Error in splitting: {str(e)}")
+        raise
 
 def run_training(feature_manifest: Path, demographics: Path, 
                 model_config: dict, training_config: dict,
@@ -184,31 +243,9 @@ def run_training(feature_manifest: Path, demographics: Path,
             print(f"{k}: {v}")
 
 
-def run_splitting(
-    feature_manifest: Path, 
-    splits_dir: Path, 
-    split_config: Dict[str, Any]
-) -> Dict[str, Any]:
-    """Create dataset splits for training"""
-    try:
-        print("\nCreating dataset splits...")
-        
-        splitter = DataSplitter(
-            train_size=split_config['train_size'],
-            n_splits=split_config['n_splits'],
-            random_state=split_config['random_state'],
-            stratify=split_config['stratify']
-        )
-        
-        splits = splitter.split_dataset(
-            features_path=feature_manifest,
-            splits_dir=splits_dir
-        )
-        
-        return splits
-    except Exception as e:
-        print(f"Error in splitting: {str(e)}")
-        raise
+
+
+
 
 
 # --- Main execution ---
@@ -238,7 +275,7 @@ if __name__ == "__main__":
         print(f"Using device: {DEVICE}")
 
     # Create necessary directories
-    for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
+    for dir_path in [PREPROC_OUT, PARCELLATED_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure metadata exists
@@ -250,14 +287,11 @@ if __name__ == "__main__":
             run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
 
         if args.stage in ["features", "full"]:
-            parcellation = SchaeferParcellation()
-            parcellation.load_parcellation()
-
-            run_feature_extraction_stage(
-                metadata_csv=METADATA_OUT,
-                preproc_dir=PREPROC_OUT,
+            run_feature_extraction(
+                metadata_out=METADATA_OUT,
+                preproc_out=PREPROC_OUT,
+                parcellated_out=PARCELLATED_OUT,
                 feature_out_dir=FEATURES_OUT,
-                atlas_labels=parcellation.roi_labels,
                 parallel=args.parallel
             )
 
@@ -273,6 +307,7 @@ if __name__ == "__main__":
                 splits_path=SPLITS_DIR / "splits.json",
                 device=DEVICE
             )
+
     except Exception as e:
         print(f"Pipeline failed: {str(e)}")
         sys.exit(1)
