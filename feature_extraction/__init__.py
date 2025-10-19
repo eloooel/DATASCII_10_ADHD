@@ -4,6 +4,7 @@ from .parcellation_and_feature_extraction import (
     FunctionalConnectivityExtractor,
     extract_features_worker,
     run_feature_extraction_stage,
+    create_feature_manifest,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "FunctionalConnectivityExtractor",
     "extract_features_worker",
     "run_feature_extraction_stage",
+    "create_feature_manifest",  # Add this
 ]

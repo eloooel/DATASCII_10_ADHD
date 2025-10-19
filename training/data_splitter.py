@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.model_selection import train_test_split, StratifiedKFold, LeaveOneGroupOut
 from typing import Dict, List, Tuple, Optional
 import json
 
@@ -54,16 +54,21 @@ class DataSplitter:
                     'val_idx': fold_val.tolist()
                 })
         
+        # Generate LOSO splits
+        loso_splits = self._generate_loso_splits(data)
+        
         # Prepare splits dictionary
         splits = {
             'train_idx': train_idx.tolist(),
             'test_idx': test_idx.tolist(),
             'cv_splits': cv_splits,
+            'loso_splits': loso_splits,
             'metadata': {
                 'n_samples': len(data),
                 'n_train': len(train_idx),
                 'n_test': len(test_idx),
                 'n_folds': self.n_splits,
+                'n_sites': len(loso_splits),
                 'train_size': self.train_size,
                 'random_state': self.random_state,
                 'stratified': self.stratify
@@ -82,8 +87,35 @@ class DataSplitter:
         print(f"Test set: {len(test_idx)} samples ({self.test_size*100:.1f}%)")
         if cv_splits:
             print(f"Cross-validation: {self.n_splits} folds")
+        print(f"LOSO validation: {len(loso_splits)} sites")
             
         return splits
+    
+    def _generate_loso_splits(self, data: pd.DataFrame) -> List[Dict]:
+        """Generate Leave-One-Site-Out splits"""
+        loso_splits = []
+        logo = LeaveOneGroupOut()
+        
+        # Ensure site column exists
+        if 'site' not in data.columns:
+            print("Warning: 'site' column not found. LOSO splits will be empty.")
+            return []
+        
+        sites = data['site'].values
+        unique_sites = data['site'].unique()
+        
+        for fold_idx, (train_idx, test_idx) in enumerate(logo.split(data, groups=sites)):
+            held_out_site = unique_sites[fold_idx]
+            loso_splits.append({
+                'fold': fold_idx + 1,
+                'held_out_site': str(held_out_site),
+                'train_idx': train_idx.tolist(),
+                'test_idx': test_idx.tolist(),
+                'n_train': len(train_idx),
+                'n_test': len(test_idx)
+            })
+        
+        return loso_splits
     
     def load_splits(self, splits_path: Path) -> Dict:
         """Load existing splits from disk"""
@@ -99,3 +131,13 @@ class DataSplitter:
         train_data = data.iloc[fold['train_idx']]
         val_data = data.iloc[fold['val_idx']]
         return train_data, val_data
+    
+    def get_loso_fold_data(
+        self,
+        data: pd.DataFrame,
+        loso_fold: Dict
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Extract training and test data for a specific LOSO fold"""
+        train_data = data.iloc[loso_fold['train_idx']]
+        test_data = data.iloc[loso_fold['test_idx']]
+        return train_data, test_data

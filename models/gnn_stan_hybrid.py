@@ -21,31 +21,33 @@ from .fusion_layer import CrossModalFusion
 class GNNSTANHybrid(nn.Module):
     """Complete GNN-STAN Hybrid Model for ADHD Classification"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(
+        self,
+        hidden_dim: int = 128,
+        num_classes: int = 2,
+        num_heads: int = 4,
+        dropout: float = 0.3,
+        gnn_config: dict = None,
+        stan_config: dict = None,
+        fusion_config: dict = None,
+        classifier_dropout: float = 0.5
+    ):
         super().__init__()
         
-        self.config = config
-        self.n_rois = config.get('n_rois', 200)
-        self.n_classes = config.get('n_classes', 2)
+        # ROI count is inferred from input data (always 200 for Schaefer-200)
+        # We'll set this in forward() on first pass
+        self.n_rois = 200  # Fixed for Schaefer-200
         
-        # Extract architecture parameters
-        gnn_config = config.get('gnn', {})
-        stan_config = config.get('stan', {})
-        fusion_config = config.get('fusion', {})
-        
-        # Initialize branches
-        self.gnn_branch = EnhancedGNNBranch(
-            input_dim=4,  # Node features: degree, clustering, eigen_centrality, local_eff
-            hidden_dims=gnn_config.get('hidden_dims', [128, 64, 32]),
-            dropout=gnn_config.get('dropout', 0.3),
-            pool_ratios=gnn_config.get('pool_ratios', [0.8, 0.6])
+        # Initialize GNN for FC matrices
+        self.gnn_encoder = EnhancedGNNBranch(
+            input_dim=self.n_rois,  # Number of ROIs
+            **gnn_config if gnn_config else {}
         )
         
-        self.stan_branch = EnhancedSTANBranch(
-            input_dim=self.n_rois,
-            hidden_dim=stan_config.get('hidden_dim', 128),
-            num_layers=stan_config.get('num_layers', 2),
-            dropout=stan_config.get('dropout', 0.3)
+        # Initialize STAN for timeseries
+        self.stan_encoder = EnhancedSTANBranch(
+            input_dim=self.n_rois,  # Number of ROIs
+            **stan_config if stan_config else {}
         )
         
         # Cross-modal fusion
@@ -57,13 +59,13 @@ class GNNSTANHybrid(nn.Module):
         )
         
         # Classification head
-        fusion_dim = fusion_config.get('fusion_dim', 128)
+        fusion_dim = fusion_config.get('fusion_dim', 128) if fusion_config else 128
         self.classifier = nn.Sequential(
             nn.Linear(fusion_dim, fusion_dim // 2),
             nn.ReLU(),
-            nn.Dropout(config.get('classifier_dropout', 0.5)),
+            nn.Dropout(classifier_dropout),  # Fixed: was config.get()
             nn.BatchNorm1d(fusion_dim // 2),
-            nn.Linear(fusion_dim // 2, self.n_classes)
+            nn.Linear(fusion_dim // 2, num_classes)  # Fixed: use num_classes
         )
         
         # Initialize weights
@@ -82,47 +84,61 @@ class GNNSTANHybrid(nn.Module):
                 elif 'bias' in name:
                     torch.nn.init.zeros_(param)
     
-    def forward(self, fc_matrix: torch.Tensor, roi_timeseries: torch.Tensor, 
-                edge_index: torch.Tensor, batch: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(self, fc_matrix: torch.Tensor, roi_timeseries: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Forward pass of the hybrid model
         
         Args:
             fc_matrix: Functional connectivity matrix (batch, n_rois, n_rois)
-            roi_timeseries: ROI time series (batch, n_rois, n_timepoints)
-            edge_index: Graph edge indices (2, n_edges)
-            batch: Batch indices for graph pooling
+            roi_timeseries: ROI time series (batch, n_timepoints, n_rois)
             
         Returns:
-            Dictionary containing logits, probabilities, and attention maps
+            logits for classification
         """
-        
-        # Extract node features from FC matrix (diagonal + upper triangle statistics)
         batch_size = fc_matrix.shape[0]
+        
+        # Create edge_index from FC matrix (fully connected graph)
+        edge_index = self._create_edge_index_from_fc(fc_matrix).to(fc_matrix.device)
+        
+        # Create batch indices for graph pooling
+        batch = torch.arange(batch_size, device=fc_matrix.device).repeat_interleave(self.n_rois)
+        
+        # Extract node features from FC matrix
         node_features = self._extract_node_features(fc_matrix)
         
         # GNN branch forward pass
-        gnn_embedding, gnn_attention = self.gnn_branch(node_features, edge_index, batch)
+        gnn_embedding = self.gnn_encoder(node_features, edge_index, batch)
         
         # STAN branch forward pass
-        stan_embedding, stan_attention = self.stan_branch(roi_timeseries)
+        stan_embedding = self.stan_encoder(roi_timeseries)
         
         # Cross-modal fusion
         fused_embedding = self.fusion(gnn_embedding, stan_embedding)
         
         # Classification
         logits = self.classifier(fused_embedding)
-        probabilities = F.softmax(logits, dim=1)
         
-        return {
-            'logits': logits,
-            'probabilities': probabilities,
-            'gnn_embedding': gnn_embedding,
-            'stan_embedding': stan_embedding,
-            'fused_embedding': fused_embedding,
-            'gnn_attention': gnn_attention,
-            'stan_attention': stan_attention
-        }
+        return logits
+
+    def _create_edge_index_from_fc(self, fc_matrix: torch.Tensor) -> torch.Tensor:
+        """Create edge index from FC matrix (keep strong connections)"""
+        batch_size, n_rois, _ = fc_matrix.shape
+        
+        # Threshold to keep only strong connections (e.g., top 20%)
+        threshold = torch.quantile(torch.abs(fc_matrix), 0.8, dim=(1,2), keepdim=True)
+        mask = torch.abs(fc_matrix) > threshold
+        
+        # Get edge indices for first sample (assume same structure for batch)
+        edge_index_list = []
+        for b in range(batch_size):
+            sources, targets = torch.where(mask[b])
+            # Add batch offset
+            sources = sources + b * n_rois
+            targets = targets + b * n_rois
+            edge_index_list.append(torch.stack([sources, targets]))
+        
+        edge_index = torch.cat(edge_index_list, dim=1)
+        return edge_index
     
     def _extract_node_features(self, fc_matrix: torch.Tensor) -> torch.Tensor:
         """Extract node features from functional connectivity matrix"""

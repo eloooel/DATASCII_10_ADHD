@@ -1,43 +1,46 @@
 import torch
 from torch.utils.data import Dataset
-from typing import Optional
+import pandas as pd
 import numpy as np
+from pathlib import Path
 
 class ADHDDataset(Dataset):
-    """Dataset class for ADHD rs-fMRI data"""
-
-    def __init__(
-        self,
-        fc_matrices: np.ndarray,
-        roi_timeseries: np.ndarray,
-        labels: np.ndarray,
-        sites: np.ndarray,
-        demographics: Optional[np.ndarray] = None,
-        augment: bool = False
-    ):
-        self.fc_matrices = torch.FloatTensor(fc_matrices)
-        self.roi_timeseries = torch.FloatTensor(roi_timeseries)
-        self.labels = torch.LongTensor(labels)
-        self.sites = sites
-        self.demographics = demographics
-        self.augment = augment
-        self.training = False
-
+    """Dataset for ADHD classification with FC matrices and time series"""
+    
+    def __init__(self, data: pd.DataFrame):
+        """
+        Args:
+            data: DataFrame with columns: subject_id, site, fc_path, ts_path, diagnosis
+        """
+        self.data = data.reset_index(drop=True)
+        
     def __len__(self):
-        return len(self.labels)
-
+        return len(self.data)
+    
     def __getitem__(self, idx):
-        fc_matrix = self.fc_matrices[idx]
-        roi_ts = self.roi_timeseries[idx]
-        label = self.labels[idx]
-        site = self.sites[idx]
+        row = self.data.iloc[idx]
+        
+        # Load FC matrix
+        fc_path = Path(row['fc_path'])
+        if fc_path.suffix == '.npy':
+            fc_matrix = np.load(fc_path)
+        else:
+            fc_matrix = pd.read_csv(fc_path, header=None).values
+        
+        # Load time series
+        ts_path = Path(row['ts_path'])
+        if ts_path.suffix == '.npy':
+            timeseries = np.load(ts_path)
+        else:
+            timeseries = pd.read_csv(ts_path, header=None).values
+        
+        # Get label
+        label = int(row['diagnosis'])  # 0 for control, 1 for ADHD
+        
         return {
-            'fc_matrix': fc_matrix,
-            'roi_timeseries': roi_ts,
-            'label': label,
-            'site': site
+            'fc_matrix': torch.FloatTensor(fc_matrix),
+            'timeseries': torch.FloatTensor(timeseries),
+            'label': torch.LongTensor([label])[0],
+            'subject_id': row['subject_id'],
+            'site': row.get('site', 'unknown')
         }
-
-    @staticmethod
-    def collate_fn(batch):
-        return {key: [d[key] for d in batch] for key in batch[0]}

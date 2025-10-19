@@ -28,7 +28,6 @@ from typing import Dict, Any, List
 # --- Configuration ---
 RAW_DIR = Path("./data/raw")
 PREPROC_OUT = Path("./data/preprocessed")
-PARCELLATED_OUT = Path("./data/parcellated")
 FEATURES_OUT = Path("./data/features")
 TRAINED_OUT = Path("./data/trained")
 METADATA_OUT = RAW_DIR / "subjects_metadata.csv"
@@ -44,20 +43,42 @@ SPLIT_CONFIG = {
 }
 
 MODEL_CONFIG = {
-    'n_rois': 200,
-    'n_classes': 2,
-    'gnn': {'hidden_dims': [128, 64, 32], 'dropout': 0.3, 'pool_ratios': [0.8, 0.6]},
-    'stan': {'hidden_dim': 128, 'num_layers': 2, 'dropout': 0.3},
-    'fusion': {'fusion_dim': 128, 'dropout': 0.3},
+    'hidden_dim': 128,
+    'num_classes': 2,
+    'num_heads': 4,
+    'dropout': 0.3,
+    'gnn': {
+        'hidden_dims': [128, 64, 32],
+        'dropout': 0.3,
+        'pool_ratios': [0.8, 0.6]
+    },
+    'stan': {
+        'hidden_dim': 128,
+        'num_layers': 2,
+        'dropout': 0.3
+    },
+    'fusion': {
+        'fusion_dim': 128,
+        'dropout': 0.3
+    },
     'classifier_dropout': 0.5
 }
 
 TRAINING_CONFIG = {
     'batch_size': 16,
-    'lr': 1e-3,
+    'learning_rate': 1e-3,
+    'optimizer': 'adam',
+    'weight_decay': 1e-5,
     'epochs': 50,
-    'patience': 10,
-    'output_dir': TRAINED_OUT / "checkpoints"
+    'early_stopping_patience': 10,
+    'early_stopping_min_delta': 0.001,
+    'gradient_clip': 1.0,
+    'num_workers': 4,
+    'use_focal_loss': True,
+    'focal_alpha': 0.25,
+    'focal_gamma': 2.0,
+    'run_loso': True,
+    'output_dir': str(TRAINED_OUT / "checkpoints")
 }
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -122,8 +143,7 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
 
 
 def run_feature_extraction(metadata_out: Path, preproc_out: Path, 
-                         parcellated_out: Path, feature_out_dir: Path, 
-                         parallel: bool = True):
+                         feature_out_dir: Path, parallel: bool = True):
     """Run feature extraction stage of the pipeline"""
     print("\nRunning Feature Extraction...")
     
@@ -132,15 +152,20 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         parcellation = SchaeferParcellation()
         parcellation.load_parcellation()
         
-        # Run feature extraction with parcellation step
+        # Run feature extraction
         results = run_feature_extraction_stage(
             metadata_csv=metadata_out,
             preproc_dir=preproc_out,
-            parcellated_dir=parcellated_out,  # Add intermediate directory
             feature_out_dir=feature_out_dir,
             atlas_labels=parcellation.roi_labels,
             parallel=parallel
         )
+        
+        # Create feature manifest for training
+        from feature_extraction import create_feature_manifest
+        metadata = pd.read_csv(metadata_out)
+        manifest_path = create_feature_manifest(feature_out_dir, metadata)
+        print(f"Created feature manifest at {manifest_path}")
         
         # Print summary
         success = sum(1 for r in results if r["status"] == "success")
@@ -201,53 +226,91 @@ def run_training(feature_manifest: Path, demographics: Path,
     # Load feature data
     feature_data = pd.read_csv(feature_manifest)
     
-    # Get train/test sets using splits
-    train_data = feature_data.iloc[splits['train_idx']]
-    test_data = feature_data.iloc[splits['test_idx']]
-    
-    # Initialize trainer with splits
+    # Initialize trainer
     trainer = TrainingOptimizationModule(
         model_config=model_config,
-        training_config=training_config
-    )
-    
-    # Run training with cross-validation splits
-    results = trainer.run_training(
-        train_data=train_data,
-        test_data=test_data,
-        cv_splits=splits['cv_splits']
-    )
-    
-    print("\nTraining complete.")
-
-    # Evaluate trained model
-    evaluator = ADHDModelEvaluator(
-        model_path=trainer.best_model_path,
-        model_config=model_config,
+        training_config=training_config,
         device=device
     )
     
-    # Evaluate using the test data
-    metrics = evaluator.evaluate(
-        fc_matrices=test_data['fc_matrices'].values,
-        roi_timeseries=test_data['timeseries'].values,
-        labels=test_data['diagnosis'].values,
-        sites=test_data.get('site', None)
+    # Create output directory
+    output_dir = Path(training_config['output_dir'])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Run cross-validation training
+    print("\n" + "="*70)
+    print("Running Cross-Validation Training")
+    print("="*70)
+    cv_results = trainer.run_cv_training(
+        feature_data=feature_data,
+        cv_splits=splits['cv_splits'],
+        save_dir=output_dir / 'cv'
     )
-
-    print("\nEvaluation Metrics:")
-    for k, v in metrics.items():
-        if isinstance(v, (float, int)):
-            print(f"{k}: {v:.4f}")
-        else:
-            print(f"{k}: {v}")
-
-
-
-
-
-
-
+    
+    # Run LOSO validation if requested
+    if training_config.get('run_loso', True) and 'loso_splits' in splits:
+        print("\n" + "="*70)
+        print("Running Leave-One-Site-Out Validation")
+        print("="*70)
+        loso_results = trainer.run_loso_training(
+            feature_data=feature_data,
+            loso_splits=splits['loso_splits'],
+            save_dir=output_dir / 'loso'
+        )
+    
+    print("\nTraining complete.")
+    
+    # Final evaluation on test set
+    print("\n" + "="*70)
+    print("Final Test Set Evaluation")
+    print("="*70)
+    
+    test_data = feature_data.iloc[splits['test_idx']]
+    
+    # Load best model
+    if trainer.best_model_path and trainer.best_model_path.exists():
+        checkpoint = torch.load(trainer.best_model_path)
+        trainer.model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"Loaded best model from {trainer.best_model_path}")
+    
+    # Evaluate
+    from torch.utils.data import DataLoader
+    from training.dataset import ADHDDataset
+    
+    test_dataset = ADHDDataset(test_data)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=training_config.get('batch_size', 32),
+        shuffle=False,
+        num_workers=training_config.get('num_workers', 4)
+    )
+    
+    _, test_acc, test_metrics = trainer.validate(test_loader)
+    
+    print(f"\nTest Set Results:")
+    print(f"Accuracy: {test_acc:.2f}%")
+    print(f"Precision: {test_metrics['precision']:.4f}")
+    print(f"Recall: {test_metrics['recall']:.4f}")
+    print(f"F1-Score: {test_metrics['f1']:.4f}")
+    print(f"AUC: {test_metrics['auc']:.4f}")
+    
+    # Save final results
+    import json
+    final_results = {
+        'cv_results': cv_results,
+        'test_metrics': test_metrics,
+        'test_accuracy': test_acc,
+        'model_config': model_config,
+        'training_config': training_config
+    }
+    
+    results_path = output_dir / 'final_results.json'
+    with open(results_path, 'w') as f:
+        json.dump(final_results, f, indent=2, default=str)
+    
+    print(f"\nResults saved to {results_path}")
+    
+    return final_results
 # --- Main execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
@@ -275,7 +338,7 @@ if __name__ == "__main__":
         print(f"Using device: {DEVICE}")
 
     # Create necessary directories
-    for dir_path in [PREPROC_OUT, PARCELLATED_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
+    for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure metadata exists
@@ -290,7 +353,6 @@ if __name__ == "__main__":
             run_feature_extraction(
                 metadata_out=METADATA_OUT,
                 preproc_out=PREPROC_OUT,
-                parcellated_out=PARCELLATED_OUT,
                 feature_out_dir=FEATURES_OUT,
                 parallel=args.parallel
             )

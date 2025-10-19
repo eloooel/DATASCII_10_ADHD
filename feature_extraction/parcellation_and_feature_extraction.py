@@ -204,8 +204,7 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         }
 
 
-def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path,
-                                 atlas_labels: list, parallel: bool = True, max_workers: int = None):
+def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list, parallel: bool = True, max_workers: int = None):
     import pandas as pd
     metadata = pd.read_csv(metadata_csv)
     feature_out_dir.mkdir(parents=True, exist_ok=True)
@@ -256,4 +255,30 @@ def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_
     failed = sum(1 for r in results if r["status"] == "failed")
     print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
     return results
+
+def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame):
+    """Create a manifest CSV with paths to all features"""
+    manifest_data = []
+    
+    for _, row in metadata.iterrows():
+        subject_id = row['subject_id']
+        site = row.get('site', row.get('dataset', 'unknown')).lower()
+        
+        fc_path = feature_out_dir / site / f"{subject_id}_connectivity_matrix.npy"
+        ts_path = feature_out_dir / site / f"{subject_id}_roi_timeseries.csv"
+        
+        if fc_path.exists() and ts_path.exists():
+            manifest_data.append({
+                'subject_id': subject_id,
+                'site': site,
+                'fc_path': str(fc_path),
+                'ts_path': str(ts_path),
+                'diagnosis': row.get('diagnosis', 0)  # Assuming this exists in metadata
+            })
+    
+    manifest_df = pd.DataFrame(manifest_data)
+    manifest_path = feature_out_dir / 'feature_manifest.csv'
+    manifest_df.to_csv(manifest_path, index=False)
+    
+    return manifest_path
 
