@@ -256,29 +256,51 @@ def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_
     print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
     return results
 
-def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame):
-    """Create a manifest CSV with paths to all features"""
+def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame) -> Path:
+    """
+    Create a manifest CSV with paths to all extracted features for training
+    
+    Args:
+        feature_out_dir: Directory containing extracted features organized by site
+        metadata: Original metadata DataFrame with subject information
+        
+    Returns:
+        Path to the created manifest CSV
+    """
     manifest_data = []
     
     for _, row in metadata.iterrows():
         subject_id = row['subject_id']
         site = row.get('site', row.get('dataset', 'unknown')).lower()
         
+        # Construct paths to feature files
         fc_path = feature_out_dir / site / f"{subject_id}_connectivity_matrix.npy"
         ts_path = feature_out_dir / site / f"{subject_id}_roi_timeseries.csv"
         
+        # Only include subjects where both features exist
         if fc_path.exists() and ts_path.exists():
             manifest_data.append({
                 'subject_id': subject_id,
                 'site': site,
                 'fc_path': str(fc_path),
                 'ts_path': str(ts_path),
-                'diagnosis': row.get('diagnosis', 0)  # Assuming this exists in metadata
+                'diagnosis': row.get('diagnosis', row.get('DX', 0))  # 0=Control, 1=ADHD
             })
+        else:
+            print(f"Warning: Missing features for {subject_id} at site {site}")
     
+    # Create DataFrame and save
     manifest_df = pd.DataFrame(manifest_data)
     manifest_path = feature_out_dir / 'feature_manifest.csv'
     manifest_df.to_csv(manifest_path, index=False)
+    
+    print(f"\nFeature Manifest Summary:")
+    print(f"  Total subjects: {len(manifest_df)}")
+    print(f"  Sites: {manifest_df['site'].nunique()}")
+    if 'diagnosis' in manifest_df.columns:
+        print(f"  Controls: {(manifest_df['diagnosis'] == 0).sum()}")
+        print(f"  ADHD: {(manifest_df['diagnosis'] == 1).sum()}")
+    print(f"  Saved to: {manifest_path}")
     
     return manifest_path
 
