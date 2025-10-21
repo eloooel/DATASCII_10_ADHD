@@ -247,16 +247,23 @@ def run_training(feature_manifest: Path, demographics: Path,
         save_dir=output_dir / 'cv'
     )
     
-    # Run LOSO validation if requested
+    # Run LOSO validation if requested AND if splits exist
     if training_config.get('run_loso', True) and 'loso_splits' in splits:
-        print("\n" + "="*70)
-        print("Running Leave-One-Site-Out Validation")
-        print("="*70)
-        loso_results = trainer.run_loso_training(
-            feature_data=feature_data,
-            loso_splits=splits['loso_splits'],
-            save_dir=output_dir / 'loso'
-        )
+        # Check if LOSO splits are actually available
+        if len(splits.get('loso_splits', [])) > 0:
+            print("\n" + "="*70)
+            print("Running Leave-One-Site-Out Validation")
+            print("="*70)
+            loso_results = trainer.run_loso_training(
+                feature_data=feature_data,
+                loso_splits=splits['loso_splits'],
+                save_dir=output_dir / 'loso'
+            )
+        else:
+            print("\n" + "="*70)
+            print("LOSO Validation Skipped - Only 1 site detected")
+            print("="*70)
+            loso_results = None
     
     print("\nTraining complete.")
     
