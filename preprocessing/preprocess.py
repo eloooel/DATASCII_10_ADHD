@@ -730,7 +730,7 @@ class PreprocessingPipeline:
 #     failed = len(results) - success
 #     print(f"\nFinished preprocessing. Success: {success}, Failed: {failed}")
 
-def _process_subject(row, pbar=None):
+def _process_subject(row):  # Remove pbar parameter
     """Process a single subject; returns result dict, no printing inside."""
     try:
         # Get device from row if available, otherwise use default
@@ -740,21 +740,22 @@ def _process_subject(row, pbar=None):
         
         pipeline = PreprocessingPipeline(device=device)
         subject_id = row["subject_id"]
-        func_path = Path(row["input_path"])  # Convert to Path object
+        func_path = Path(row["input_path"])
 
-        # Extract site from input path - will get "OHSU" from the path structure
-        site_name = func_path.parts[-5] if len(func_path.parts) >= 5 else row.get("site", "UnknownSite")
+        # Extract site from multiple possible sources
+        site_name = (
+            row.get("site") or 
+            row.get("dataset") or 
+            func_path.parts[-5] if len(func_path.parts) >= 5 else "UnknownSite"
+        )
 
-        if pbar is not None:
-            pbar.set_postfix_str(f"Subject: {site_name} {subject_id}")
-            pbar.refresh()  
 
         # Verify file exists and is readable
         if not func_path.exists():
             raise FileNotFoundError(f"Input file not found: {func_path.absolute()}")
         if not func_path.is_file():
             raise ValueError(f"Input path is not a file: {func_path.absolute()}")
-        
+
 
         # Check file extension
         if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
@@ -803,7 +804,7 @@ def _process_subject(row, pbar=None):
             return {
                 "status": "success",
                 "subject_id": subject_id,
-                "site": site_name,
+                "site": site_name,  # Make sure site is included in return
                 "message": f"Preprocessed {subject_id} (Site: {site_name})"
             }
         else:

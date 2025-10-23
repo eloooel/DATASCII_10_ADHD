@@ -108,40 +108,54 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
-        # Process in small batches to avoid memory overload
-        batch_size = 4 if parallel else 1
+        batch_size = TRAINING_CONFIG.get('batch_size', 8) if parallel else 1
         all_results = []
+        total_batches = (len(metadata) - 1) // batch_size + 1
         
-        for i in range(0, len(metadata), batch_size):
-            batch = metadata.iloc[i:i+batch_size].copy()
-            batch['device'] = 'cpu'  # Force CPU
-            batch['out_dir'] = str(preproc_out)
-            
-            print(f"\nProcessing batch {i//batch_size + 1}/{(len(metadata)-1)//batch_size + 1}")
-            
-            if parallel and len(batch) > 1:
-                results = run_parallel(
-                    func=_process_subject,
-                    items=batch.to_dict('records'),
-                    max_workers=2,  # Maximum 2 workers
-                    desc=f"Batch {i//batch_size + 1}"
-                )
-            else:
-                # Sequential for small batches
-                results = []
-                for _, row in batch.iterrows():
-                    result = _process_subject(row)
-                    results.append(result)
+        # Single overview progress bar
+        with tqdm(total=len(metadata), desc="Preprocessing", unit="subj") as pbar:
+            for i in range(0, len(metadata), batch_size):
+                batch_num = i // batch_size + 1
+                batch = metadata.iloc[i:i+batch_size].copy()
+                batch['device'] = 'cpu'  # Force CPU
+                batch['out_dir'] = str(preproc_out)
+                
+                if parallel and len(batch) > 1:
+                    # Get current site for display
+                    current_site = batch.iloc[0].get("site", batch.iloc[0].get("dataset", "Unknown"))
+                    pbar.set_postfix_str(f"{current_site} Batch {batch_num}/{total_batches}")
                     
-                    # Force cleanup between subjects
-                    import gc
-                    gc.collect()
-            
-            all_results.extend(results)
-            
-            # Pause between batches to let system recover
-            import time
-            time.sleep(2)
+                    results = run_parallel(
+                        func=_process_subject,
+                        items=batch.to_dict('records'),
+                        desc=None 
+                    )
+                    
+                    # Update progress bar for the entire batch
+                    pbar.update(len(batch))
+                    
+                else:
+                    # SEQUENTIAL MODE: Show individual subject details
+                    for _, row in batch.iterrows():
+                        site = row.get("site", row.get("dataset", "UnknownSite"))
+                        subject_id = row.get("subject_id", "unknown")
+                        pbar.set_postfix_str(f"{site} {subject_id}")
+                        
+                        result = _process_subject(row)
+                        results.append(result)
+                        
+                        # Update progress after each subject
+                        pbar.update(1)
+                        
+                        # Force cleanup between subjects
+                        import gc
+                        gc.collect()
+                
+                all_results.extend(results)
+                
+                # Pause between batches to let system recover
+                import time
+                time.sleep(2)
         
         # Print summary
         success = sum(1 for r in all_results if r["status"] == "success")
@@ -157,7 +171,7 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
 
 def run_feature_extraction(metadata_out: Path, preproc_out: Path, 
                          feature_out_dir: Path, parallel: bool = True):
-    """Run feature extraction stage of the pipeline"""
+    """Run feature extraction stage of the pipeline with consistent progress display"""
     print("\nRunning Feature Extraction...")
     
     try:
@@ -165,27 +179,69 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         parcellation = SchaeferParcellation()
         parcellation.load_parcellation()
         
-        # Run feature extraction
-        results = run_feature_extraction_stage(
-            metadata_csv=metadata_out,
-            preproc_dir=preproc_out,
-            feature_out_dir=feature_out_dir,
-            atlas_labels=parcellation.roi_labels,
-            parallel=parallel
-        )
+        # Load metadata
+        metadata = pd.read_csv(metadata_out)
+        print(f"Loaded metadata for {len(metadata)} subjects")
+
+        batch_size = 4 if parallel else 1
+        all_results = []
+        total_batches = (len(metadata) - 1) // batch_size + 1
+        
+        with tqdm(total=len(metadata), desc="Feature Extraction", unit="subj") as pbar:
+            for i in range(0, len(metadata), batch_size):
+                batch_num = i // batch_size + 1
+                batch = metadata.iloc[i:i+batch_size].copy()
+                
+                if parallel and len(batch) > 1:
+                    # PARALLEL MODE: Show batch progress with current site (just one site)
+                    current_site = batch.iloc[0]['site'] if 'site' in batch.columns else batch.iloc[0].get('dataset', 'Unknown')
+                    
+                    pbar.set_postfix_str(f"{current_site} Batch {batch_num}/{total_batches}")
+                    
+                    # Extract features for batch in parallel
+                    from feature_extraction.parcellation_and_feature_extraction import extract_features_worker
+                    
+                    results = run_parallel(
+                        func=lambda row: extract_features_worker(
+                            row, preproc_out, feature_out_dir, parcellation.roi_labels
+                        ),
+                        items=batch.to_dict('records'),
+                        desc=None  # Disable internal progress bar
+                    )
+                    
+                    # Update progress for entire batch
+                    pbar.update(len(batch))
+                    
+                else:
+                    # SEQUENTIAL MODE: Show individual subject details (consistent with preprocessing)
+                    for _, row in batch.iterrows():
+                        site = row.get("site", row.get("dataset", "UnknownSite"))
+                        subject_id = row.get("subject_id", "unknown")
+                        pbar.set_postfix_str(f"{site} {subject_id}")
+                        
+                        # Extract features for individual subject
+                        from feature_extraction.parcellation_and_feature_extraction import extract_features_worker
+                        result = extract_features_worker(
+                            row, preproc_out, feature_out_dir, parcellation.roi_labels
+                        )
+                        results.append(result)
+                        
+                        # Update progress after each subject
+                        pbar.update(1)
+                
+                all_results.extend(results)
         
         # Create feature manifest for training
         from feature_extraction import create_feature_manifest
-        metadata = pd.read_csv(metadata_out)
         manifest_path = create_feature_manifest(feature_out_dir, metadata)
         print(f"Created feature manifest at {manifest_path}")
         
         # Print summary
-        success = sum(1 for r in results if r["status"] == "success")
-        failed = len(results) - success
+        success = sum(1 for r in all_results if r["status"] == "success")
+        failed = len(all_results) - success
         print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
         
-        return results
+        return all_results
         
     except Exception as e:
         print(f"Error in feature extraction: {str(e)}")

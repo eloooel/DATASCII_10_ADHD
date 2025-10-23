@@ -139,8 +139,8 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
     """Worker function for feature extraction"""
     try:
         subject_id = row["subject_id"]
-        # Fix site extraction - get it from the dataset column or input path
-        site = row.get("dataset", row.get("site", Path(row["input_path"]).parts[-5])).lower()
+        # Consistent site extraction logic
+        site = row.get("site", row.get("dataset", Path(row["input_path"]).parts[-5] if len(Path(row["input_path"]).parts) >= 5 else "UnknownSite"))
         
         # Update paths for NIfTI files with correct site handling
         func_path = preproc_dir / site / subject_id / "func_preproc.nii.gz"
@@ -169,91 +169,73 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
             }
 
         # Load NIfTI data
-        try:
-            func_img = nib.load(func_path)
-            mask_img = nib.load(mask_path)
+        func_img = nib.load(func_path)
+        mask_img = nib.load(mask_path)
+        
+        func_data = func_img.get_fdata()
+        mask_data = mask_img.get_fdata()
+        
+        # Initialize parcellation
+        parcellation = SchaeferParcellation()
+        if not parcellation.load_parcellation():
+            # Use placeholder if loading fails
+            parcellation._create_placeholder_parcellation()
             
-            func_data = func_img.get_fdata()
-            mask_data = mask_img.get_fdata()
-            
-            # Rest of feature extraction remains the same
-            parcellation = SchaeferParcellation()
-            parcellation.load_parcellation()
-            roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
+        # Extract ROI timeseries
+        roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
 
-            # Save features (now converting to NPY/CSV for downstream analysis)
-            extractor = FeatureExtractor(site_feature_dir, atlas_labels)
-            outputs = extractor.process_subject(subject_id, roi_timeseries)
+        # Save features
+        extractor = FeatureExtractor(site_feature_dir, atlas_labels)
+        outputs = extractor.process_subject(subject_id, roi_timeseries)
 
-            return {"subject_id": subject_id, "site": site, "status": "success", "outputs": outputs}
-            
-        except Exception as e:
-            return {
-                "status": "failed",
-                "subject_id": subject_id,
-                "site": site,
-                "error": str(e)
-            }
-
+        return {
+            "subject_id": subject_id, 
+            "site": site, 
+            "status": "success", 
+            "outputs": outputs
+        }
+        
     except Exception as e:
         return {
             "status": "failed",
-            "subject_id": subject_id,
-            "site": site,
+            "subject_id": subject_id if 'subject_id' in locals() else "unknown",
+            "site": site if 'site' in locals() else "unknown",
             "error": str(e)
         }
 
 
 def run_feature_extraction_stage(metadata_csv: Path, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list, parallel: bool = True, max_workers: int = None):
+    """
+    Backend feature extraction function - no UI handling
+    Used by main.py which handles all progress display
+    """
     import pandas as pd
     metadata = pd.read_csv(metadata_csv)
     feature_out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("\nRunning Feature Extraction...")
-    results = []
-
-    # --- Sequential (single process, tqdm like preprocessing) ---
-    if not parallel:
-        from tqdm import tqdm
-        with tqdm(total=len(metadata), desc="Feature Extraction", unit="subject",
-                  dynamic_ncols=True, leave=True) as pbar:
-            for _, row in metadata.iterrows():
-                subject_id = row["subject_id"]
-                pbar.set_postfix_str(f"Current: {subject_id}")
-
-                result = extract_features_worker(row, preproc_dir, feature_out_dir, atlas_labels)
-                results.append(result)
-
-                pbar.update(1)
-
-    # --- Parallel version with same tqdm ---
-    else:
+    # Simple parallel/sequential execution without progress bars
+    if parallel:
         from concurrent.futures import ProcessPoolExecutor, as_completed
-        from tqdm import tqdm
-
-        tasks = [row for _, row in metadata.iterrows()]
+        
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {executor.submit(
                 extract_features_worker, row, preproc_dir, feature_out_dir, atlas_labels
             ): row["subject_id"] for _, row in metadata.iterrows()}
 
-            with tqdm(total=len(futures), desc="Feature Extraction", unit="subject",
-                      dynamic_ncols=True, leave=True) as pbar:
-                for future in as_completed(futures):
+            results = []
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
                     subject_id = futures[future]
-                    pbar.set_postfix_str(f"Current: {subject_id}")
+                    results.append({"subject_id": subject_id, "status": "failed", "error": str(e)})
+    else:
+        # Sequential execution
+        results = []
+        for _, row in metadata.iterrows():
+            result = extract_features_worker(row, preproc_dir, feature_out_dir, atlas_labels)
+            results.append(result)
 
-                    try:
-                        results.append(future.result())
-                    except Exception as e:
-                        results.append({"subject_id": subject_id, "status": "failed", "error": str(e)})
-
-                    pbar.update(1)
-
-    # --- Summary ---
-    success = sum(1 for r in results if r["status"] == "success")
-    failed = sum(1 for r in results if r["status"] == "failed")
-    print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
     return results
 
 def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame) -> Path:

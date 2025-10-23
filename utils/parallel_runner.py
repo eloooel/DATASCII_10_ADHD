@@ -32,26 +32,36 @@ def run_parallel(func, items, max_workers=None, desc="Processing"):
     if max_workers is None:
         max_workers = min(2, os.cpu_count() or 1)
     
-    print(f"Starting parallel processing with {max_workers} workers...")
-    
     # Use ProcessPoolExecutor with as_completed for real-time progress
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Submit all tasks
         future_to_item = {executor.submit(func, item): item for item in items}
         
-        # Track completed tasks with progress bar
+        # Track completed tasks
         results = []
-        with tqdm(total=len(items), desc=desc) as pbar:
+        
+        # Only show progress bar if desc is provided
+        if desc:
+            with tqdm(total=len(items), desc=desc) as pbar:
+                for future in concurrent.futures.as_completed(future_to_item):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        pbar.update(1)
+                    except Exception as e:
+                        item = future_to_item[future]
+                        print(f"Error processing {item}: {e}")
+                        results.append({"status": "error", "error": str(e)})
+                        pbar.update(1)
+        else:
+            # No progress bar - just collect results silently
             for future in concurrent.futures.as_completed(future_to_item):
                 try:
                     result = future.result()
                     results.append(result)
-                    pbar.update(1)  # Update for each completed task
                 except Exception as e:
-                    # Handle individual task failures
                     item = future_to_item[future]
                     print(f"Error processing {item}: {e}")
                     results.append({"status": "error", "error": str(e)})
-                    pbar.update(1)
     
     return results
