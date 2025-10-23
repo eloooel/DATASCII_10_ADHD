@@ -346,6 +346,13 @@ class TrainingOptimizationModule:
         save_dir: Path
     ) -> Dict:
         """Run Leave-One-Site-Out validation"""
+        # Guard: skip if no LOSO splits provided
+        if not loso_splits:
+            print("\n" + "="*70)
+            print("LOSO VALIDATION SKIPPED - insufficient sites (need >=2)")
+            print("="*70)
+            return {'loso_results': [], 'average_metrics': {}, 'status': 'skipped', 'reason': 'insufficient_sites'}
+
         print("\n" + "="*70)
         print("STARTING LEAVE-ONE-SITE-OUT VALIDATION")
         print("="*70)

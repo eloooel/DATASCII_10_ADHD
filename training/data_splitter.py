@@ -94,24 +94,23 @@ class DataSplitter:
     def _generate_loso_splits(self, data: pd.DataFrame) -> List[Dict]:
         """Generate Leave-One-Site-Out splits"""
         loso_splits = []
-        
+
         # Ensure site column exists
         if 'site' not in data.columns:
             print("Warning: 'site' column not found. LOSO splits will be empty.")
             return []
-        
+
         unique_sites = data['site'].unique()
-        
-        # Check if we have enough sites for LOSO
+
+        # Skip LOSO when there is only one site
         if len(unique_sites) < 2:
-            print(f"Warning: Only {len(unique_sites)} site(s) found. LOSO requires at least 2 sites.")
-            print("LOSO validation will be skipped.")
+            print(f"Warning: Only {len(unique_sites)} site(s) found. LOSO requires at least 2 sites. Skipping LOSO.")
             return []
-        
-        # Proceed with LOSO only if we have multiple sites
+
+        # Proceed with LOGO (LOSO)
         logo = LeaveOneGroupOut()
         sites = data['site'].values
-        
+
         for fold_idx, (train_idx, test_idx) in enumerate(logo.split(data, groups=sites)):
             held_out_site = unique_sites[fold_idx]
             loso_splits.append({
@@ -122,7 +121,7 @@ class DataSplitter:
                 'n_train': len(train_idx),
                 'n_test': len(test_idx)
             })
-        
+
         return loso_splits
     
     def load_splits(self, splits_path: Path) -> Dict:

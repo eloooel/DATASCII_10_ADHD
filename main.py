@@ -65,7 +65,7 @@ MODEL_CONFIG = {
 }
 
 TRAINING_CONFIG = {
-    'batch_size': 16,
+    'batch_size': 4,
     'learning_rate': 1e-3,
     'optimizer': 'adam',
     'weight_decay': 1e-5,
@@ -73,12 +73,17 @@ TRAINING_CONFIG = {
     'early_stopping_patience': 10,
     'early_stopping_min_delta': 0.001,
     'gradient_clip': 1.0,
-    'num_workers': 4,
+    'num_workers': 0,
     'use_focal_loss': True,
     'focal_alpha': 0.25,
     'focal_gamma': 2.0,
     'run_loso': True,
-    'output_dir': str(TRAINED_OUT / "checkpoints")
+    'output_dir': str(TRAINED_OUT / "checkpoints"),
+
+    # Memory optimization settings
+    'use_amp': True,
+    'use_gradient_checkpointing': True,
+    'gradient_accumulation_steps': 4
 }
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -96,47 +101,55 @@ def ensure_metadata(data_dir: Path, metadata_out: Path):
 
 
 def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = True, device: torch.device = None):
-    """Run preprocessing for all subjects"""
+    """Run preprocessing for all subjects in small batches"""
     print("\nRunning Preprocessing...")
-
+    
     try:
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
-        # Add device and output directory to metadata
-        metadata['device'] = str(device)
-        metadata['out_dir'] = str(preproc_out)
-
-        if parallel:
-            results = run_parallel(
-                tasks=metadata.to_dict('records'),
-                worker_fn=_process_subject,
-                max_workers=None
-            )
-        else:
-            # Sequential processing with progress bar
-            from tqdm import tqdm
-            results = []
-            with tqdm(total=len(metadata), desc="Preprocessing", unit="subj") as pbar:
-                for _, row in metadata.iterrows():
-                    # Show Site next to Subject in the postfix
-                    site = row.get("site", "UnknownSite")
-                    subject_id = row.get("subject_id", "unknown")
-                    pbar.set_postfix_str(f"Site: {site} | Subject: {subject_id}")
-
-                    # Call _process_subject and pass the progress bar if needed
-                    result = _process_subject(row, pbar=pbar)
+        # Process in small batches to avoid memory overload
+        batch_size = 4 if parallel else 1
+        all_results = []
+        
+        for i in range(0, len(metadata), batch_size):
+            batch = metadata.iloc[i:i+batch_size].copy()
+            batch['device'] = 'cpu'  # Force CPU
+            batch['out_dir'] = str(preproc_out)
+            
+            print(f"\nProcessing batch {i//batch_size + 1}/{(len(metadata)-1)//batch_size + 1}")
+            
+            if parallel and len(batch) > 1:
+                results = run_parallel(
+                    func=_process_subject,
+                    items=batch.to_dict('records'),
+                    max_workers=2,  # Maximum 2 workers
+                    desc=f"Batch {i//batch_size + 1}"
+                )
+            else:
+                # Sequential for small batches
+                results = []
+                for _, row in batch.iterrows():
+                    result = _process_subject(row)
                     results.append(result)
-                    pbar.update(1)
-
-
+                    
+                    # Force cleanup between subjects
+                    import gc
+                    gc.collect()
+            
+            all_results.extend(results)
+            
+            # Pause between batches to let system recover
+            import time
+            time.sleep(2)
+        
         # Print summary
-        success = sum(1 for r in results if r["status"] == "success")
-        failed = len(results) - success
+        success = sum(1 for r in all_results if r["status"] == "success")
+        failed = len(all_results) - success
         print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
         
-        return results
-
+        return all_results
+        
     except Exception as e:
         print(f"Error in preprocessing: {str(e)}")
         raise
@@ -353,17 +366,26 @@ if __name__ == "__main__":
 
     # Run pipeline stages
     try:
-        if args.stage in ["preprocessing", "full"]:
-            run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
+        # If a feature manifest already exists, treat "full" as skipping preprocessing+feature extraction.
+        manifest_exists = FEATURE_MANIFEST.exists()
 
-        if args.stage in ["features", "full"]:
+        # Preprocessing: run if explicitly requested, or if "full" and no manifest exists
+        if args.stage == "preprocessing" or (args.stage == "full" and not manifest_exists):
+            run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
+        else:
+            print("Skipping preprocessing (feature manifest found). To force, run --stage preprocessing or delete the manifest.")
+
+        # Feature extraction: run if explicitly requested, or if "full" and not manifest_exists
+        if args.stage == "features" or (args.stage == "full" and not manifest_exists):
             run_feature_extraction(
                 metadata_out=METADATA_OUT,
                 preproc_out=PREPROC_OUT,
                 feature_out_dir=FEATURES_OUT,
                 parallel=args.parallel
             )
-
+        else:
+            print("Skipping feature extraction (feature manifest found). To force, run --stage features or delete the manifest.")
+ 
         if args.stage in ["split", "training", "full"]:
             splits = run_splitting(FEATURE_MANIFEST, SPLITS_DIR, SPLIT_CONFIG)
 

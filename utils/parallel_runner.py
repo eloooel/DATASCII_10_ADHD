@@ -1,7 +1,9 @@
 from concurrent.futures import ProcessPoolExecutor, as_completed
+import concurrent.futures
 from tqdm import tqdm
 import multiprocessing
 from typing import List, Callable, Any, Dict
+import os
 
 
 def _safe_worker_wrapper(worker_fn: Callable[[Any], Any], task: Any) -> Dict[str, Any]:
@@ -25,29 +27,31 @@ def _safe_worker_wrapper(worker_fn: Callable[[Any], Any], task: Any) -> Dict[str
         return {"status": "failed", "error": str(e), "task": str(task)}
 
 
-def run_parallel(tasks: List[Any], worker_fn: Callable[[Any], Any], max_workers: int = None) -> List[Any]:
-    """
-    Runs a list of tasks in parallel using ProcessPoolExecutor with a shared progress bar.
-    Each worker runs in isolation with safe imports to prevent NameError issues.
-    """
+def run_parallel(func, items, max_workers=None, desc="Processing"):
+    """Run function in parallel with proper progress tracking"""
     if max_workers is None:
-        max_workers = multiprocessing.cpu_count()
-
-    results = [None] * len(tasks)
-
+        max_workers = min(2, os.cpu_count() or 1)
+    
+    print(f"Starting parallel processing with {max_workers} workers...")
+    
+    # Use ProcessPoolExecutor with as_completed for real-time progress
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_safe_worker_wrapper, worker_fn, task): i
-            for i, task in enumerate(tasks)
-        }
-
-        with tqdm(total=len(futures), desc="Preprocessing subjects") as pbar:
-            for future in as_completed(futures):
-                idx = futures[future]
+        # Submit all tasks
+        future_to_item = {executor.submit(func, item): item for item in items}
+        
+        # Track completed tasks with progress bar
+        results = []
+        with tqdm(total=len(items), desc=desc) as pbar:
+            for future in concurrent.futures.as_completed(future_to_item):
                 try:
-                    results[idx] = future.result()
+                    result = future.result()
+                    results.append(result)
+                    pbar.update(1)  # Update for each completed task
                 except Exception as e:
-                    results[idx] = {"status": "failed", "error": str(e)}
-                pbar.update(1)
-
+                    # Handle individual task failures
+                    item = future_to_item[future]
+                    print(f"Error processing {item}: {e}")
+                    results.append({"status": "error", "error": str(e)})
+                    pbar.update(1)
+    
     return results
