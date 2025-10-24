@@ -13,96 +13,240 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 class DataDiscovery:
-    """Handles discovery and organization of rs-fMRI data from hierarchical structure"""
+    """Enhanced data discovery for ADHD-200 datasets with flexible naming patterns"""
 
     def __init__(self, data_root: Path):
-        self.data_root = data_root
+        self.data_root = Path(data_root)
 
     def discover_subjects(self) -> List[Dict[str, Any]]:
-        """Discover all subjects and their functional files"""
+        """Discover all subjects with flexible ADHD-200 naming patterns"""
         subjects = []
-
+        
         for dataset_dir in self.data_root.iterdir():
-            if not dataset_dir.is_dir():
+            if not dataset_dir.is_dir() or dataset_dir.name.startswith('.'):
                 continue
 
             dataset_name = dataset_dir.name
-
+            
+            # Load site-specific participants info if available
+            participants_info = self._load_participants_info(dataset_dir)
+            
+            dataset_subjects = []
             for subject_dir in dataset_dir.iterdir():
                 if not subject_dir.is_dir() or not subject_dir.name.startswith('sub-'):
                     continue
 
                 subject_id = subject_dir.name
-                subjects_found = self._discover_subject_files(dataset_name, subject_id, subject_dir)
-                subjects.extend(subjects_found)
+                
+                # Find functional file with flexible patterns
+                func_file, session = self._find_functional_file(subject_dir, subject_id)
+                
+                if func_file:
+                    # Extract diagnosis from participants info
+                    diagnosis = self._get_diagnosis(subject_id, participants_info)
+                    
+                    entry = {
+                        'dataset': dataset_name,
+                        'site': dataset_name,  # Use dataset name as site
+                        'subject_id': subject_id,
+                        'session': session or '1',
+                        'task': 'rest',
+                        'input_path': str(func_file),
+                        'relative_path': str(func_file.relative_to(self.data_root)),
+                        'file_size_mb': round(func_file.stat().st_size / (1024 * 1024), 2),
+                        'diagnosis': diagnosis,
+                        'has_session_dir': 'ses-' in str(func_file)
+                    }
+                    dataset_subjects.append(entry)
+        
+        subjects.extend(dataset_subjects)
 
-        return sorted(subjects, key=lambda x: (x['dataset'], x['subject_id'], x.get('session') or '', x.get('run') or ''))
+        # Single line output
+        sites = len(set(s['site'] for s in subjects))
+        print(f"Total discovered: {len(subjects)} subjects across {sites} sites")
+        return subjects
 
-    def _discover_subject_files(self, dataset_name: str, subject_id: str, subject_dir: Path) -> List[Dict[str, Any]]:
-        """Discover functional files for a single subject"""
-        subject_files = []
+    def _find_functional_file(self, subject_dir: Path, subject_id: str) -> tuple:
+        """Find functional fMRI file with flexible ADHD-200 naming patterns"""
+        
+        # Define search patterns in priority order (most specific to most general)
+        search_patterns = [
+            # BIDS-compliant patterns
+            (f"ses-*/func/{subject_id}_ses-*_task-rest*_bold.nii.gz", "bids_session"),
+            (f"func/{subject_id}_ses-*_task-rest*_bold.nii.gz", "bids_no_session"),
+            (f"ses-*/func/{subject_id}_*task-rest*.nii.gz", "bids_flexible"),
+            
+            # ADHD-200 common patterns
+            (f"func/{subject_id}_task-rest*.nii.gz", "adhd200_task"),
+            (f"func/{subject_id}_rest*.nii.gz", "adhd200_rest"),
+            (f"func/{subject_id}_func*.nii.gz", "adhd200_func"),
+            (f"ses-*/func/{subject_id}_*.nii.gz", "session_any"),
+            (f"func/{subject_id}*.nii.gz", "func_any"),
+            
+            # Fallback patterns
+            (f"**/*rest*.nii.gz", "fallback_rest"),
+            (f"**/*bold*.nii.gz", "fallback_bold"),
+            (f"**/*func*.nii.gz", "fallback_func"),
+            (f"**/{subject_id}*.nii.gz", "fallback_subject"),
+        ]
+        
+        for pattern, pattern_type in search_patterns:
+            matches = list(subject_dir.glob(pattern))
+            
+            if matches:
+                # Prefer files with 'rest' or 'bold' in the name
+                best_match = self._select_best_functional_file(matches)
+                
+                if best_match:
+                    session = self._extract_session_from_path(best_match)
+                    return best_match, session
+        
+        return None, None
 
-        # Direct func directory
-        direct_func_dir = subject_dir / "func"
-        if direct_func_dir.exists():
-            subject_files.extend(self._find_nifti_in_func_dir(direct_func_dir, dataset_name, subject_id, None))
+    def _select_best_functional_file(self, candidates: List[Path]) -> Path:
+        """Select the best functional file from multiple candidates"""
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        # Scoring system for file selection
+        scored_files = []
+        for file in candidates:
+            score = 0
+            name_lower = file.name.lower()
+            
+            # Prefer rest-state files
+            if 'rest' in name_lower:
+                score += 10
+            if 'bold' in name_lower:
+                score += 8
+            if 'task-rest' in name_lower:
+                score += 15
+            
+            # Prefer session 1
+            if 'ses-1' in name_lower:
+                score += 5
+            
+            # Prefer run 1
+            if 'run-1' in name_lower:
+                score += 3
+            
+            # Prefer shorter names (usually more standard)
+            score -= len(file.name) * 0.01
+            
+            scored_files.append((score, file))
+        
+        # Return file with highest score
+        scored_files.sort(key=lambda x: x[0], reverse=True)
+        return scored_files[0][1]
 
-        # Session directories
-        for item in subject_dir.iterdir():
-            if item.is_dir() and item.name.startswith('ses-'):
-                session_name = item.name
-                session_func_dir = item / "func"
-                if session_func_dir.exists():
-                    subject_files.extend(self._find_nifti_in_func_dir(session_func_dir, dataset_name, subject_id, session_name))
-
-        return subject_files
-
-    def _find_nifti_in_func_dir(self, func_dir: Path, dataset_name: str, subject_id: str,
-                                session_name: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Find all NIfTI files in a func directory and create subject entries"""
-        subject_entries = []
-
-        nifti_files = []
-        for pattern in ["*.nii", "*.nii.gz"]:
-            nifti_files.extend(list(func_dir.glob(pattern)))
-
-        for nifti_file in nifti_files:
-            filename = nifti_file.name
-            session_from_filename = self._extract_bids_field(filename, 'ses')
-            run = self._extract_bids_field(filename, 'run')
-            task = self._extract_bids_field(filename, 'task')
-
-            final_session = session_name.replace('ses-', '') if session_name else session_from_filename
-
-            entry = {
-                'dataset': dataset_name,
-                'subject_id': subject_id,
-                'session': final_session,
-                'run': run,
-                'task': task or 'rest',
-                'input_path': str(nifti_file),
-                'relative_path': str(nifti_file.relative_to(self.data_root)),
-                'file_size_mb': round(nifti_file.stat().st_size / (1024 * 1024), 2),
-                'has_session_dir': session_name is not None
-            }
-            subject_entries.append(entry)
-
-        return subject_entries
-
-    @staticmethod
-    def _extract_bids_field(filename: str, field: str) -> Optional[str]:
-        """Extract BIDS field from filename (e.g., 'ses-1' -> '1')"""
+    def _extract_session_from_path(self, file_path: Path) -> str:
+        """Extract session from file path or name"""
+        path_str = str(file_path)
+        
+        # Look for ses-X pattern
         import re
-        pattern = f"{field}-([^_]+)"
-        match = re.search(pattern, filename)
-        return match.group(1) if match else None
+        ses_match = re.search(r'ses-(\d+)', path_str)
+        if ses_match:
+            return ses_match.group(1)
+        
+        # Default to session 1
+        return '1'
+
+
+
+    def _get_diagnosis(self, subject_id: str, participants_info: Dict) -> int:
+        """Get diagnosis for subject (0=Control, 1=ADHD)"""
+        if subject_id in participants_info:
+            return participants_info[subject_id]
+        
+        # Try without 'sub-' prefix
+        alt_id = subject_id.replace('sub-', '')
+        if alt_id in participants_info:
+            return participants_info[alt_id]
+        
+        # Try with 'sub-' prefix
+        alt_id = f"sub-{subject_id.replace('sub-', '')}"
+        if alt_id in participants_info:
+            return participants_info[alt_id]
+        
+        # Default to control (0) if diagnosis unknown
+        return 0
 
     @staticmethod
     def save_metadata(subjects: List[Dict[str, Any]], output_path: Path):
-        """Save subjects metadata to CSV"""
+        """Save subjects metadata to CSV with summary"""
         df = pd.DataFrame(subjects)
         df.to_csv(output_path, index=False)
-        print(f"Saved metadata for {len(subjects)} subjects to {output_path}")
+        # No additional output
+
+    def _load_participants_info(self, dataset_dir: Path) -> Dict:
+        """Load participants.tsv or phenotypic data for diagnosis information"""
+        participants_info = {}
+        
+        # Common ADHD-200 metadata files
+        metadata_files = [
+            dataset_dir / "participants.tsv",
+            dataset_dir / "participants.txt",
+            dataset_dir / "phenotypic_data.tsv",
+            dataset_dir / "phenotypic_data.txt",
+            dataset_dir / f"{dataset_dir.name}_phenotypic.csv",
+        ]
+        
+        for metadata_file in metadata_files:
+            if metadata_file.exists():
+                try:
+                    # Try different separators
+                    for sep in ['\t', ',', ' ']:
+                        try:
+                            df = pd.read_csv(metadata_file, sep=sep)
+                            
+                            # Find participant ID column
+                            id_col = None
+                            for col in ['participant_id', 'Subject', 'ScanDir ID', 'subject_id']:
+                                if col in df.columns:
+                                    id_col = col
+                                    break
+                            
+                            if id_col is None:
+                                continue
+                            
+                            # Find diagnosis column
+                            dx_col = None
+                            for col in ['DX', 'diagnosis', 'dx', 'group', 'Diagnosis']:
+                                if col in df.columns:
+                                    dx_col = col
+                                    break
+                            
+                            if dx_col is not None:
+                                for _, row in df.iterrows():
+                                    subj_id = str(row[id_col])
+                                    if not subj_id.startswith('sub-'):
+                                        subj_id = f"sub-{subj_id}"
+                                    
+                                    # Convert diagnosis to binary (0=Control, 1=ADHD)
+                                    dx_value = row[dx_col]
+                                    if pd.isna(dx_value):
+                                        diagnosis = 0  # Default to control
+                                    elif dx_value in [0, '0', 'TDC', 'Control', 'control', 'TD']:
+                                        diagnosis = 0
+                                    elif dx_value in [1, '1', 'ADHD', 'adhd', 'ADHD-C', 'ADHD-I', 'ADHD-H']:
+                                        diagnosis = 1
+                                    else:
+                                        diagnosis = 0  # Default unknown to control
+                                    
+                                    participants_info[subj_id] = diagnosis
+                                
+
+                                return participants_info
+                                
+                        except:
+                            continue
+                        
+                except Exception as e:
+                    print(f"  ⚠️ Error reading {metadata_file}: {e}")
+                    continue
+    
+        return participants_info
 
 
 def load_metadata(manifest_path: Path) -> List[Dict[str, Any]]:
