@@ -173,12 +173,12 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         success_subjects = [r for r in all_results if r["status"] == "success"]
         failed_subjects = [r for r in all_results if r["status"] == "failed"]
         
-        print(f"\n=== PREPROCESSING SUMMARY ===")
-        print(f"✅ Success: {len(success_subjects)} subjects")
-        print(f"❌ Failed: {len(failed_subjects)} subjects")
+        print(f"\nPreprocessing Summary")
+        print(f"Success: {len(success_subjects)} subjects")
+        print(f"Failed: {len(failed_subjects)} subjects")
         
         if failed_subjects:
-            print(f"\n❌ Failed subjects:")
+            print(f"\nFailed subjects:")
             for fail in failed_subjects[:10]:  # Show first 10
                 print(f"  - {fail['subject_id']} ({fail.get('site', 'unknown')}): {fail.get('error', 'unknown error')}")
             if len(failed_subjects) > 10:
@@ -201,28 +201,27 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
-        # ✅ FIXED: Use correct atlas path
         parcellation_path = Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii")
         
         # Check if atlas exists before proceeding
         if not parcellation_path.exists():
-            print(f"❌ Atlas file not found at: {parcellation_path.absolute()}")
+            print(f"Atlas file not found at: {parcellation_path.absolute()}")
             print("Available atlas files:")
             atlas_dir = Path("atlas")
             if atlas_dir.exists():
                 for f in atlas_dir.rglob("*.nii*"):
                     print(f"  - {f}")
-            raise ValueError(f"❌ CRITICAL: Could not find Schaefer parcellation at {parcellation_path}. "
+            raise ValueError(f"CRITICAL: Could not find Schaefer parcellation at {parcellation_path}. "
                            "Feature extraction cannot proceed without real parcellation atlas.")
         
         parcellation = SchaeferParcellation(parcellation_path)
         
         if not parcellation.load_parcellation():
-            raise ValueError(f"❌ CRITICAL: Could not load Schaefer parcellation from {parcellation_path}. "
+            raise ValueError(f"CRITICAL: Could not load Schaefer parcellation from {parcellation_path}. "
                            "Feature extraction cannot proceed without real parcellation atlas. "
                            "Please ensure the Schaefer atlas file is available.")
         
-        print("✅ Schaefer parcellation loaded successfully")
+        print("Schaefer parcellation loaded successfully")
         atlas_labels = parcellation.roi_labels
 
         # Use dynamic batch size from config
@@ -283,7 +282,7 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
                 # Check for parcellation failures
                 parcellation_failures = [r for r in results if r.get("error_type") == "parcellation_unavailable"]
                 if parcellation_failures:
-                    print(f"\n❌ CRITICAL: {len(parcellation_failures)} subjects failed due to missing parcellation atlas")
+                    print(f"\nCritical: {len(parcellation_failures)} subjects failed due to missing parcellation atlas")
                     print("Feature extraction cannot proceed without real Schaefer parcellation.")
                     break
         
@@ -302,8 +301,8 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         other_fails = failed - parcellation_fails - preprocessing_fails
         
         print(f"\nFeature extraction complete:")
-        print(f"  ✅ Success: {success}")
-        print(f"  ❌ Failed: {failed}")
+        print(f"Success: {success}")
+        print(f"Failed: {failed}")
         if parcellation_fails:
             print(f"    - Parcellation unavailable: {parcellation_fails}")
         if preprocessing_fails:
