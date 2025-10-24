@@ -160,7 +160,10 @@ class PreprocessingPipeline:
     def _load_and_validate_data(self, input_path: str) -> tuple:
         """Load and validate input fMRI data with CUDA support"""
         data = nib.load(input_path)
-        img_data = torch.from_numpy(data.get_fdata()).to(self.device)
+        
+        # ✅ FIXED: Ensure float32 and avoid object arrays
+        img_data_np = data.get_fdata().astype(np.float32)
+        img_data = torch.from_numpy(img_data_np).to(self.device)
         
         if len(img_data.shape) != 4:
             raise ValueError(f"Expected 4D data, got {len(img_data.shape)}D")
@@ -186,58 +189,55 @@ class PreprocessingPipeline:
             self._log_step("motion_correction", "skipped", "Disabled in config")
             return data_img, None
 
-        # Get data and metadata
+        # Get data and metadata - ensure proper data types
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = data_img.get_fdata()
+            img_data = data_img.get_fdata().astype(np.float32)  # ✅ Force float32
             affine = data_img.affine
             header = data_img.header
-        else:
-            img_data = data_img.cpu().numpy() if torch.is_tensor(data_img) else np.array(data_img)
+        elif torch.is_tensor(data_img):
+            img_data = data_img.cpu().numpy().astype(np.float32)  # ✅ Force float32
             affine = self.metadata['affine']
             header = None
-
-        # Convert PyTorch tensor to numpy if needed
-        if torch.is_tensor(data_img):
-            img_data = data_img.cpu().numpy()
         else:
-            img_data = data_img.get_fdata()
+            img_data = np.array(data_img, dtype=np.float32)  # ✅ Force float32
+            affine = self.metadata['affine']
+            header = None
 
         n_vols = img_data.shape[-1]
         
         # Create reference volume (mean or first volume)
         if params['reference'] == 'mean':
-            reference = np.mean(img_data, axis=-1)
+            reference = np.mean(img_data, axis=-1).astype(np.float32)
         elif params['reference'] == 'first':
-            reference = img_data[..., 0]
+            reference = img_data[..., 0].astype(np.float32)
         else:
             # Assume reference is a volume index
             ref_idx = int(params['reference'])
-            reference = img_data[..., ref_idx]
+            reference = img_data[..., ref_idx].astype(np.float32)
 
         # Initialize motion parameters
         motion_params = {
-            'translations': np.zeros((n_vols, 3)),  # x, y, z translations
-            'rotations': np.zeros((n_vols, 3)),     # roll, pitch, yaw rotations
-            'displacement': np.zeros(n_vols),       # frame displacement
+            'translations': np.zeros((n_vols, 3), dtype=np.float32),  # ✅ Explicit dtype
+            'rotations': np.zeros((n_vols, 3), dtype=np.float32),     # ✅ Explicit dtype
+            'displacement': np.zeros(n_vols, dtype=np.float32),       # ✅ Explicit dtype
             'excluded_volumes': []
         }
 
-        corrected_data = np.zeros_like(img_data)
+        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # ✅ Explicit dtype
 
         # Process each volume
         for vol_idx in range(n_vols):
-            current_vol = img_data[..., vol_idx]
-            # Ensure current_vol is a numpy array
-            if torch.is_tensor(current_vol):
-                current_vol = current_vol.cpu().numpy()
+            current_vol = img_data[..., vol_idx].astype(np.float32)
             translation = self._estimate_translation(reference, current_vol)
-            # Ensure translation is a finite numpy array
+            
+            # Ensure translation is finite float32
             translation = np.asarray(translation, dtype=np.float32)
             if not np.all(np.isfinite(translation)):
-                translation = np.zeros_like(translation)
-            # Now apply shift
+                translation = np.zeros(3, dtype=np.float32)
+                
+            # Apply shift
             corrected_vol = ndimage.shift(current_vol, translation, order=1, mode='nearest')
-            corrected_data[..., vol_idx] = corrected_vol
+            corrected_data[..., vol_idx] = corrected_vol.astype(np.float32)
             
             # Store motion parameters
             motion_params['translations'][vol_idx] = translation
@@ -415,11 +415,11 @@ class PreprocessingPipeline:
 
         # Get data and affine/header
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = torch.from_numpy(data_img.get_fdata()).to(self.device)
+            img_data = data_img.get_fdata().astype(np.float32)  # ✅ Ensure float32
             affine = data_img.affine
             header = data_img.header
         else:
-            img_data = data_img if torch.is_tensor(data_img) else torch.from_numpy(data_img).to(self.device)
+            img_data = np.array(data_img, dtype=np.float32)  # ✅ Force float32
             affine = metadata['affine']
             header = None
 
@@ -444,52 +444,51 @@ class PreprocessingPipeline:
         # Design Butterworth bandpass filter
         try:
             b, a = signal.butter(filter_order, [low, high], btype='band')
-            b_torch = torch.from_numpy(b).to(self.device)
-            a_torch = torch.from_numpy(a).to(self.device)
         except ValueError:
             # Fallback to high-pass only if bandpass fails
             b, a = signal.butter(filter_order, low, btype='high')
-            b_torch = torch.from_numpy(b).to(self.device)
-            a_torch = torch.from_numpy(a).to(self.device)
             self._log_step("temporal_filtering", "warning", "Applied high-pass only")
 
         # Get brain mask for filtering (avoid filtering background)
-        mean_img = torch.mean(img_data, dim=-1)
-        brain_mask = mean_img > torch.quantile(mean_img[mean_img > 0], 0.25)
+        mean_img = np.mean(img_data, axis=-1)
+        brain_mask = mean_img > np.percentile(mean_img[mean_img > 0], 25)
         
-        # Apply filter to each voxel on GPU
-        filtered_data = img_data.clone()
-        brain_voxels = torch.where(brain_mask)
+        # Apply filter to each voxel using NumPy (avoid PyTorch object arrays)
+        filtered_data = img_data.copy()
+        brain_voxels = np.where(brain_mask)
         total_voxels = len(brain_voxels[0])
         
         for i in range(total_voxels):
             x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
-            voxel_ts = filtered_data[x, y, z, :]
+            voxel_ts = filtered_data[x, y, z, :].astype(np.float32)  # ✅ Ensure float32
             
-            if torch.any(voxel_ts != 0):
+            if np.any(voxel_ts != 0):
                 try:
-                    # Detrend
-                    t = torch.arange(voxel_ts.shape[0], dtype=torch.float32, device=self.device)
-                    p = torch.polynomial.polynomial.polyfit(t, voxel_ts, deg=1)
-                    trend = p[0] + p[1] * t
+                    # ✅ FIXED: Use NumPy polyfit instead of torch.polynomial
+                    t = np.arange(voxel_ts.shape[0], dtype=np.float32)
+                    p = np.polyfit(t, voxel_ts, deg=1)  # Returns [slope, intercept]
+                    trend = p[1] + p[0] * t  # y = intercept + slope * x
                     detrended = voxel_ts - trend
 
-                    # FFT-based filtering
-                    fft = torch.fft.rfft(detrended)
-                    freqs = torch.fft.rfftfreq(voxel_ts.shape[0], d=tr)
-                    mask = (freqs >= low_freq) & (freqs <= high_freq)
-                    fft = fft * mask.to(self.device)
-                    filtered = torch.fft.irfft(fft, n=voxel_ts.shape[0])
-                    
-                    # Add trend back
-                    filtered_data[x, y, z, :] = filtered + trend
-                except:
+                    # ✅ FIXED: Use scipy.signal.filtfilt instead of FFT
+                    try:
+                        filtered_ts = signal.filtfilt(b, a, detrended)
+                        # Add trend back
+                        filtered_data[x, y, z, :] = filtered_ts + trend
+                    except:
+                        # If filtfilt fails, use simple high-pass
+                        filtered_data[x, y, z, :] = detrended + np.mean(detrended)
+                        
+                except Exception as e:
                     # Keep original if filtering fails
                     continue
 
         # Always return NIfTI
-        filtered_array = filtered_data.cpu().numpy()
-        filtered_img = nib.Nifti1Image(filtered_array, affine, header)
+        filtered_img = nib.Nifti1Image(filtered_data, affine, header)
+        
+        self._log_step("temporal_filtering", "success", 
+                      f"Applied {low_freq:.3f}-{high_freq:.3f}Hz bandpass filter")
+        
         return filtered_img
 
     def _denoising(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 

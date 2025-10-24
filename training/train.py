@@ -65,11 +65,10 @@ class TrainingOptimizationModule:
             verbose=True
         )
         
-        # Early stopping
+        # Early stopping - ✅ FIXED
         self.early_stopping = EarlyStopping(
             patience=training_config.get('early_stopping_patience', 10),
-            min_delta=training_config.get('early_stopping_min_delta', 0.001),
-            verbose=True
+            min_delta=training_config.get('early_stopping_min_delta', 0.001)
         )
         
         # Training history

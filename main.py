@@ -134,6 +134,13 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
                     # Update progress bar for the entire batch
                     pbar.update(len(batch))
                     
+                    # Check for failed results
+                    failed_results = [r for r in results if r.get("status") == "failed" or r.get("status") == "error"]
+                    if failed_results:
+                        print(f"\nParallel Failure: {len(failed_results)} subjects failed")
+                        for fail in failed_results[:5]:  # Show first 5
+                            print(f"  - {fail.get('subject_id', 'unknown')}: {fail.get('error', 'unknown error')}")
+                    
                 else:
                     # SEQUENTIAL MODE: Show individual subject details
                     for _, row in batch.iterrows():
@@ -162,6 +169,21 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
         failed = len(all_results) - success
         print(f"\nPreprocessing complete. Success: {success}, Failed: {failed}")
         
+        # Print detailed summary at the end
+        success_subjects = [r for r in all_results if r["status"] == "success"]
+        failed_subjects = [r for r in all_results if r["status"] == "failed"]
+        
+        print(f"\n=== PREPROCESSING SUMMARY ===")
+        print(f"✅ Success: {len(success_subjects)} subjects")
+        print(f"❌ Failed: {len(failed_subjects)} subjects")
+        
+        if failed_subjects:
+            print(f"\n❌ Failed subjects:")
+            for fail in failed_subjects[:10]:  # Show first 10
+                print(f"  - {fail['subject_id']} ({fail.get('site', 'unknown')}): {fail.get('error', 'unknown error')}")
+            if len(failed_subjects) > 10:
+                print(f"  ... and {len(failed_subjects) - 10} more")
+        
         return all_results
         
     except Exception as e:
@@ -175,15 +197,36 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
     print("\nRunning Feature Extraction...")
     
     try:
-        # Initialize parcellation
-        parcellation = SchaeferParcellation()
-        parcellation.load_parcellation()
-        
         # Load metadata
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
 
-        batch_size = 4 if parallel else 1
+        # ✅ FIXED: Use correct atlas path
+        parcellation_path = Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii")
+        
+        # Check if atlas exists before proceeding
+        if not parcellation_path.exists():
+            print(f"❌ Atlas file not found at: {parcellation_path.absolute()}")
+            print("Available atlas files:")
+            atlas_dir = Path("atlas")
+            if atlas_dir.exists():
+                for f in atlas_dir.rglob("*.nii*"):
+                    print(f"  - {f}")
+            raise ValueError(f"❌ CRITICAL: Could not find Schaefer parcellation at {parcellation_path}. "
+                           "Feature extraction cannot proceed without real parcellation atlas.")
+        
+        parcellation = SchaeferParcellation(parcellation_path)
+        
+        if not parcellation.load_parcellation():
+            raise ValueError(f"❌ CRITICAL: Could not load Schaefer parcellation from {parcellation_path}. "
+                           "Feature extraction cannot proceed without real parcellation atlas. "
+                           "Please ensure the Schaefer atlas file is available.")
+        
+        print("✅ Schaefer parcellation loaded successfully")
+        atlas_labels = parcellation.roi_labels
+
+        # Use dynamic batch size from config
+        batch_size = TRAINING_CONFIG.get('batch_size', 8) if parallel else 1
         all_results = []
         total_batches = (len(metadata) - 1) // batch_size + 1
         
@@ -193,27 +236,33 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
                 batch = metadata.iloc[i:i+batch_size].copy()
                 
                 if parallel and len(batch) > 1:
-                    # PARALLEL MODE: Show batch progress with current site (just one site)
+                    # PARALLEL MODE: Show batch progress with current site
                     current_site = batch.iloc[0]['site'] if 'site' in batch.columns else batch.iloc[0].get('dataset', 'Unknown')
                     
                     pbar.set_postfix_str(f"{current_site} Batch {batch_num}/{total_batches}")
                     
-                    # Extract features for batch in parallel
-                    from feature_extraction.parcellation_and_feature_extraction import extract_features_worker
-                    
+                    # Add required parameters to each row for the worker
+                    batch_with_params = []
+                    for _, row in batch.iterrows():
+                        row_dict = row.to_dict()
+                        row_dict['preproc_dir'] = str(preproc_out)
+                        row_dict['feature_out_dir'] = str(feature_out_dir)
+                        row_dict['atlas_labels'] = atlas_labels
+                        row_dict['parcellation_path'] = str(parcellation_path)
+                        batch_with_params.append(row_dict)
+
                     results = run_parallel(
-                        func=lambda row: extract_features_worker(
-                            row, preproc_out, feature_out_dir, parcellation.roi_labels
-                        ),
-                        items=batch.to_dict('records'),
-                        desc=None  # Disable internal progress bar
+                        func=_extract_features_worker_wrapper,
+                        items=batch_with_params,
+                        desc=None
                     )
                     
                     # Update progress for entire batch
                     pbar.update(len(batch))
                     
                 else:
-                    # SEQUENTIAL MODE: Show individual subject details (consistent with preprocessing)
+                    # SEQUENTIAL MODE: Show individual subject details
+                    results = []
                     for _, row in batch.iterrows():
                         site = row.get("site", row.get("dataset", "UnknownSite"))
                         subject_id = row.get("subject_id", "unknown")
@@ -222,7 +271,7 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
                         # Extract features for individual subject
                         from feature_extraction.parcellation_and_feature_extraction import extract_features_worker
                         result = extract_features_worker(
-                            row, preproc_out, feature_out_dir, parcellation.roi_labels
+                            row, preproc_out, feature_out_dir, atlas_labels, parcellation_path  # ✅ Add path
                         )
                         results.append(result)
                         
@@ -230,16 +279,37 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
                         pbar.update(1)
                 
                 all_results.extend(results)
+                
+                # Check for parcellation failures
+                parcellation_failures = [r for r in results if r.get("error_type") == "parcellation_unavailable"]
+                if parcellation_failures:
+                    print(f"\n❌ CRITICAL: {len(parcellation_failures)} subjects failed due to missing parcellation atlas")
+                    print("Feature extraction cannot proceed without real Schaefer parcellation.")
+                    break
         
         # Create feature manifest for training
         from feature_extraction import create_feature_manifest
         manifest_path = create_feature_manifest(feature_out_dir, metadata)
         print(f"Created feature manifest at {manifest_path}")
         
-        # Print summary
+        # Print summary with error breakdown
         success = sum(1 for r in all_results if r["status"] == "success")
         failed = len(all_results) - success
-        print(f"\nFeature extraction complete. Success: {success}, Failed: {failed}")
+        
+        # Categorize failures
+        parcellation_fails = sum(1 for r in all_results if r.get("error_type") == "parcellation_unavailable")
+        preprocessing_fails = sum(1 for r in all_results if r.get("error_type") == "missing_preprocessing")
+        other_fails = failed - parcellation_fails - preprocessing_fails
+        
+        print(f"\nFeature extraction complete:")
+        print(f"  ✅ Success: {success}")
+        print(f"  ❌ Failed: {failed}")
+        if parcellation_fails:
+            print(f"    - Parcellation unavailable: {parcellation_fails}")
+        if preprocessing_fails:
+            print(f"    - Missing preprocessing files: {preprocessing_fails}")
+        if other_fails:
+            print(f"    - Other errors: {other_fails}")
         
         return all_results
         
@@ -247,6 +317,20 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         print(f"Error in feature extraction: {str(e)}")
         raise
 
+
+def _extract_features_worker_wrapper(row_dict):
+    """Wrapper function that can be pickled for multiprocessing"""
+    from feature_extraction.parcellation_and_feature_extraction import extract_features_worker
+    from pathlib import Path
+    
+    # Extract parameters from row_dict
+    preproc_dir = Path(row_dict.pop('preproc_dir'))
+    feature_out_dir = Path(row_dict.pop('feature_out_dir'))
+    atlas_labels = row_dict.pop('atlas_labels')
+    parcellation_path = Path(row_dict.pop('parcellation_path'))  # ✅ Add this
+    
+    # Call the actual worker function
+    return extract_features_worker(row_dict, preproc_dir, feature_out_dir, atlas_labels, parcellation_path)
 
 def run_splitting(
     feature_manifest: Path, 
