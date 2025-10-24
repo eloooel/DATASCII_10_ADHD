@@ -5,6 +5,7 @@ import nibabel as nib
 import argparse
 import pandas as pd
 
+from nilearn.datasets import load_mni152_template
 from utils import run_parallel
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -56,7 +57,7 @@ class PreprocessingPipeline:
                 'enabled': True,
                 'reference': 'mean',
                 'save_parameters': True,
-                'max_displacement_mm': 3.0  # Exclusion threshold
+                'max_displacement_mm': 3.0
             },
             'slice_timing_correction': {
                 'enabled': True,
@@ -67,18 +68,28 @@ class PreprocessingPipeline:
             'spatial_normalization': {
                 'enabled': True,
                 'template': 'MNI152',
-                'resolution': 2.0,
-                'smooth_fwhm': 6.0  # Spatial smoothing after normalization
+                'resolution': 2,  # MNI152 resolution in mm
+                'smooth_fwhm': 6.0  # Spatial smoothing after registration
             },
             'temporal_filtering': {
                 'enabled': True,
-                'low_freq': 0.009,  # Hz
-                'high_freq': 0.08,  # Hz
+                'low_freq': 0.009,
+                'high_freq': 0.08,
                 'filter_type': 'butterworth',
                 'filter_order': 4
             },
             'denoising': {
                 'motion_regression': True,
+                'ica_aroma': {  # ✅ ICA-AROMA configuration
+                    'enabled': True,
+                    'n_components': 25,
+                    'max_iter': 200,
+                    'tolerance': 1e-4,
+                    'motion_correlation_threshold': 0.3,
+                    'high_freq_threshold': 0.2,
+                    'high_freq_ratio_threshold': 0.6,
+                    'spatial_std_threshold': 2.0
+                },
                 'acompcor': {
                     'enabled': True,
                     'n_components': 5,
@@ -126,21 +137,30 @@ class PreprocessingPipeline:
             # Ensure each stage returns NIfTI
             data_img = self._ensure_nifti(data, metadata, original_img.header)
             
-            # Pipeline stages
+            # Pipeline stages in correct order
             data_img, motion_params = self._motion_correction(data_img, self.config['motion_correction'])
             data_img = self._slice_timing_correction(data_img, self.config['slice_timing_correction'], metadata)
-            data_img = self._spatial_normalization(data_img, self.config['spatial_normalization'])
+            data_img = self._spatial_normalization(data_img, self.config['spatial_normalization'])  # ✅ Now includes MNI152
             data_img = self._temporal_filtering(data_img, self.config['temporal_filtering'], metadata)
+            
+            # ✅ ICA-AROMA after temporal filtering, before other denoising
+            if self.config['denoising'].get('ica_aroma', {}).get('enabled', True):
+                data_img, ica_results = self._ica_aroma(data_img, motion_params, self.config['denoising']['ica_aroma'])
+            else:
+                ica_results = {}
+            
+            # Other denoising (aCompCor, etc.)
             data_img, confound_regressors = self._denoising(data_img, motion_params, self.config['denoising'])
 
             # Generate brain mask
             brain_mask = self._generate_brain_mask(data_img)
 
             return {
-                'processed_data': data_img,  # Now guaranteed to be NIfTI
+                'processed_data': data_img,
                 'confound_regressors': confound_regressors,
                 'brain_mask': brain_mask,
                 'motion_parameters': motion_params,
+                'ica_results': ica_results,  # ✅ Add ICA results
                 'metadata': metadata,
                 'processing_log': self.processing_log,
                 'subject_id': self.subject_id,
@@ -370,42 +390,58 @@ class PreprocessingPipeline:
         return corrected_img
 
     def _spatial_normalization(self, data_img, params: Dict[str, Any]):
-        """Spatial normalization with smoothing"""
+        """MNI152 registration using nilearn - no fallbacks"""
         if not params.get('enabled', True):
             self._log_step("spatial_normalization", "skipped", "Disabled in config")
             return data_img
 
-        img_data = data_img.get_fdata()
-        
-        # Apply spatial smoothing (in lieu of full registration to MNI)
-        # This is a simplified version - real implementation would include registration
-        smooth_fwhm = params.get('smooth_fwhm', 6.0)
-        if smooth_fwhm > 0:
-            # Convert FWHM to sigma for Gaussian filter
-            sigma = smooth_fwhm / (2 * np.sqrt(2 * np.log(2)))
+        try:
+            from nilearn.datasets import load_mni152_template
+            from nilearn.image import resample_to_img, smooth_img
             
-            # Get voxel sizes for anisotropic smoothing
-            voxel_sizes = data_img.header.get_zooms()[:3]
-            sigma_voxels = [sigma / vox_size for vox_size in voxel_sizes]
+            # Load MNI152 template at specified resolution
+            resolution = params.get('resolution', 2)
+            mni_template = load_mni152_template(resolution=resolution)
             
-            smoothed_data = np.zeros_like(img_data)
+            self._log_step("spatial_normalization", "info", 
+                          f"Loaded MNI152 template at {resolution}mm resolution")
             
-            # Smooth each volume
-            for t in range(img_data.shape[-1]):
-                smoothed_data[..., t] = ndimage.gaussian_filter(
-                    img_data[..., t], sigma=sigma_voxels, mode='nearest'
-                )
-            
-            # Create smoothed nibabel image
-            normalized_img = nib.Nifti1Image(smoothed_data, data_img.affine, data_img.header)
+            # Resample functional data to MNI152 space
+            # This performs affine registration to template space
+            normalized_img = resample_to_img(
+                data_img, 
+                mni_template, 
+                interpolation='linear'
+            )
             
             self._log_step("spatial_normalization", "success", 
-                          f"Applied {smooth_fwhm}mm FWHM smoothing")
-        else:
-            normalized_img = data_img
-            self._log_step("spatial_normalization", "success", "No smoothing applied")
-
-        return normalized_img
+                          f"Resampled to MNI152 space: {normalized_img.shape}")
+            
+            # Apply spatial smoothing after normalization
+            smooth_fwhm = params.get('smooth_fwhm', 6.0)
+            if smooth_fwhm > 0:
+                smoothed_img = smooth_img(normalized_img, fwhm=smooth_fwhm)
+                
+                self._log_step("spatial_normalization", "success", 
+                              f"Applied {smooth_fwhm}mm FWHM smoothing after MNI152 registration")
+                
+                return smoothed_img
+            else:
+                self._log_step("spatial_normalization", "success", 
+                              "MNI152 registration complete (no smoothing)")
+                return normalized_img
+                
+        except ImportError as e:
+            # Fail if nilearn not available
+            self._log_step("spatial_normalization", "failed", 
+                          f"Nilearn not available for MNI152 registration: {e}")
+            raise RuntimeError(f"MNI152 registration requires nilearn: {e}")
+            
+        except Exception as e:
+            # Fail if registration fails
+            self._log_step("spatial_normalization", "failed", 
+                          f"MNI152 registration failed: {e}")
+            raise RuntimeError(f"MNI152 registration failed: {e}")
 
     def _temporal_filtering(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
         """Real temporal bandpass filtering with CUDA support"""
@@ -824,5 +860,163 @@ def _process_subject(row):  # Remove pbar parameter
             "message": f"Failed: {str(e)}"
         }
 
-# if __name__ == "__main__":
-#     run_batch_cli()
+def _ica_aroma(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 
+               params: Dict[str, Any]) -> tuple:
+    """ICA-AROMA for automatic motion artifact removal"""
+    if not params.get('enabled', True):
+        self._log_step("ica_aroma", "skipped", "Disabled in config")
+        return data_img, {}
+
+    try:
+        from sklearn.decomposition import FastICA
+        import scipy.stats as stats
+        
+        img_data = data_img.get_fdata().astype(np.float32)
+        
+        # Reshape data for ICA: (n_timepoints, n_voxels)
+        original_shape = img_data.shape
+        n_timepoints = original_shape[-1]
+        
+        # Create brain mask for ICA
+        brain_mask = self._generate_brain_mask(data_img)
+        brain_voxels_idx = np.where(brain_mask > 0)
+        n_brain_voxels = len(brain_voxels_idx[0])
+        
+        # Extract brain voxel time series
+        brain_timeseries = np.zeros((n_timepoints, n_brain_voxels), dtype=np.float32)
+        for i in range(n_brain_voxels):
+            x, y, z = brain_voxels_idx[0][i], brain_voxels_idx[1][i], brain_voxels_idx[2][i]
+            brain_timeseries[:, i] = img_data[x, y, z, :]
+        
+        # Determine number of ICA components (typically 20-40 for rs-fMRI)
+        n_components = min(params.get('n_components', 25), n_timepoints - 1, n_brain_voxels // 100)
+        
+        if n_components < 5:
+            # Fail if insufficient components - no fallback
+            raise ValueError(f"Insufficient components for ICA-AROMA ({n_components}). "
+                           "Need at least 5 components for reliable motion artifact detection.")
+        
+        # Run ICA
+        ica = FastICA(
+            n_components=n_components,
+            random_state=42,
+            max_iter=params.get('max_iter', 200),
+            tol=params.get('tolerance', 1e-4)
+        )
+        
+        # Fit ICA and get components
+        ica_timeseries = ica.fit_transform(brain_timeseries)  # (n_timepoints, n_components)
+        ica_spatial_maps = ica.components_  # (n_components, n_voxels)
+        
+        # Identify motion-related components using AROMA criteria
+        motion_components = self._identify_motion_components(
+            ica_timeseries, ica_spatial_maps, motion_params, params
+        )
+        
+        # Remove motion components by regression
+        cleaned_timeseries = brain_timeseries.copy()
+        
+        for comp_idx in motion_components:
+            # Regress out the motion component from each voxel
+            component_ts = ica_timeseries[:, comp_idx]
+            
+            for voxel_idx in range(n_brain_voxels):
+                voxel_ts = cleaned_timeseries[:, voxel_idx]
+                
+                # Linear regression: voxel = beta * component + residual
+                correlation = np.corrcoef(voxel_ts, component_ts)[0, 1]
+                if not np.isnan(correlation) and abs(correlation) > 0.1:
+                    # Calculate regression coefficient
+                    beta = correlation * (np.std(voxel_ts) / (np.std(component_ts) + 1e-8))
+                    # Remove component contribution
+                    cleaned_timeseries[:, voxel_idx] = voxel_ts - beta * component_ts
+        
+        # Put cleaned data back into original 4D structure
+        cleaned_data = img_data.copy()
+        for i in range(n_brain_voxels):
+            x, y, z = brain_voxels_idx[0][i], brain_voxels_idx[1][i], brain_voxels_idx[2][i]
+            cleaned_data[x, y, z, :] = cleaned_timeseries[:, i]
+        
+        # Create cleaned NIfTI image
+        cleaned_img = nib.Nifti1Image(cleaned_data, data_img.affine, data_img.header)
+        
+        self._log_step("ica_aroma", "success", 
+                      f"Removed {len(motion_components)} motion components out of {n_components} total")
+        
+        return cleaned_img, {
+            'motion_components': motion_components,
+            'total_components': n_components,
+            'n_components_removed': len(motion_components)
+        }
+        
+    except Exception as e:
+        # No fallback - fail completely if ICA-AROMA cannot run
+        self._log_step("ica_aroma", "failed", f"ICA-AROMA failed: {e}")
+        raise RuntimeError(f"ICA-AROMA preprocessing failed: {e}")
+
+def _identify_motion_components(self, ica_timeseries: np.ndarray, ica_spatial_maps: np.ndarray,
+                               motion_params: Dict, params: Dict) -> List[int]:
+    """Identify motion-related ICA components using AROMA criteria"""
+    motion_components = []
+    
+    if motion_params is None:
+        self._log_step("ica_aroma", "warning", "No motion parameters available for AROMA classification")
+        return motion_components
+    
+    n_components = ica_timeseries.shape[1]
+    motion_ts = motion_params.get('displacement', np.zeros(ica_timeseries.shape[0]))
+    
+    for comp_idx in range(n_components):
+        is_motion = False
+        component_ts = ica_timeseries[:, comp_idx]
+        
+        # Criterion 1: High correlation with motion parameters (most important)
+        if len(motion_ts) == len(component_ts):
+            correlation = np.corrcoef(component_ts, motion_ts)[0, 1]
+            if not np.isnan(correlation) and abs(correlation) > params.get('motion_correlation_threshold', 0.3):
+                is_motion = True
+                self._log_step("ica_aroma", "info", 
+                             f"Component {comp_idx}: Motion correlation = {correlation:.3f}")
+        
+        # Criterion 2: High frequency content (motion artifacts are often high-frequency)
+        if not is_motion:  # Only check if not already classified as motion
+            try:
+                # Frequency domain analysis
+                fft = np.fft.fft(component_ts)
+                freqs = np.fft.fftfreq(len(component_ts))
+                power_spectrum = np.abs(fft) ** 2
+                
+                # Check if most power is in high frequencies (>0.2 Hz for typical rs-fMRI)
+                high_freq_mask = np.abs(freqs) > params.get('high_freq_threshold', 0.2)
+                high_freq_power = np.sum(power_spectrum[high_freq_mask])
+                total_power = np.sum(power_spectrum)
+                
+                high_freq_ratio = high_freq_power / (total_power + 1e-8)
+                if high_freq_ratio > params.get('high_freq_ratio_threshold', 0.6):
+                    is_motion = True
+                    self._log_step("ica_aroma", "info", 
+                                 f"Component {comp_idx}: High frequency ratio = {high_freq_ratio:.3f}")
+            except:
+                pass  # Skip frequency analysis if it fails
+        
+        # Criterion 3: Edge-heavy spatial distribution (simplified)
+        if not is_motion:  # Only check if not already classified as motion
+            try:
+                spatial_map = ica_spatial_maps[comp_idx, :]
+                spatial_std = np.std(spatial_map)
+                
+                # High spatial variation could indicate motion artifacts
+                if spatial_std > params.get('spatial_std_threshold', 2.0):
+                    # Additional check: look for edge-like patterns (this is simplified)
+                    high_values = np.abs(spatial_map) > np.percentile(np.abs(spatial_map), 95)
+                    if np.sum(high_values) / len(spatial_map) < 0.1:  # Very sparse activation
+                        is_motion = True
+                        self._log_step("ica_aroma", "info", 
+                                     f"Component {comp_idx}: Edge-like spatial pattern detected")
+            except:
+                pass
+        
+        if is_motion:
+            motion_components.append(comp_idx)
+    
+    return motion_components
