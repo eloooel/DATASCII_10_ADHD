@@ -151,8 +151,8 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         # Check preprocessing existence
         if not func_path.exists():
             return {
-                "status": "failed", 
-                "subject_id": subject_id, 
+                "status": "failed",
+                "subject_id": subject_id,
                 "site": site,
                 "error": f"Missing preprocessed file: {func_path}",
                 "error_type": "missing_preprocessing"
@@ -160,8 +160,8 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
 
         if not mask_path.exists():
             return {
-                "status": "failed", 
-                "subject_id": subject_id, 
+                "status": "failed",
+                "subject_id": subject_id,
                 "site": site,
                 "error": f"Missing mask file: {mask_path}",
                 "error_type": "missing_preprocessing"

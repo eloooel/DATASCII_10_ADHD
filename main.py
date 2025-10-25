@@ -200,6 +200,24 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         # Load metadata
         metadata = pd.read_csv(metadata_out)
         print(f"Loaded metadata for {len(metadata)} subjects")
+        
+        # Debugging output
+        print(f"Sites in metadata: {metadata['site'].value_counts()}")
+
+        # Check which subjects have preprocessing files
+        missing_preprocessing = []
+        for _, row in metadata.iterrows():
+            site = row['site']
+            subject_id = row['subject_id']
+            func_path = preproc_out / site / subject_id / "func_preproc.nii.gz"
+            mask_path = preproc_out / site / subject_id / "mask.nii.gz"
+            
+            if not func_path.exists() or not mask_path.exists():
+                missing_preprocessing.append(f"{site}/{subject_id}")
+
+        print(f"Missing preprocessing files for {len(missing_preprocessing)} subjects:")
+        for subj in missing_preprocessing[:10]:  # Show first 10
+            print(f"  - {subj}")
 
         parcellation_path = Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii")
         

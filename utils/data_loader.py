@@ -13,13 +13,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 class DataDiscovery:
-    """Enhanced data discovery for ADHD-200 datasets with flexible naming patterns"""
+    """Simple data discovery for ADHD-200 datasets"""
 
     def __init__(self, data_root: Path):
         self.data_root = Path(data_root)
 
     def discover_subjects(self) -> List[Dict[str, Any]]:
-        """Discover all subjects with flexible ADHD-200 naming patterns"""
+        """Discovery that finds ALL functional runs per subject"""
         subjects = []
         
         for dataset_dir in self.data_root.iterdir():
@@ -27,132 +27,156 @@ class DataDiscovery:
                 continue
 
             dataset_name = dataset_dir.name
+            print(f"Processing dataset: {dataset_name}")
             
-            # Load site-specific participants info if available
             participants_info = self._load_participants_info(dataset_dir)
             
             dataset_subjects = []
-            for subject_dir in dataset_dir.iterdir():
-                if not subject_dir.is_dir() or not subject_dir.name.startswith('sub-'):
-                    continue
-
+            subject_dirs = [d for d in dataset_dir.iterdir() 
+                           if d.is_dir() and d.name.startswith('sub-')]
+            
+            for subject_dir in subject_dirs:
                 subject_id = subject_dir.name
                 
-                # Find functional file with flexible patterns
-                func_file, session = self._find_functional_file(subject_dir, subject_id)
+                # Get ALL functional files for this subject
+                func_files = self._find_all_functional_files(subject_dir)
                 
-                if func_file:
-                    # Extract diagnosis from participants info
+                if func_files:
                     diagnosis = self._get_diagnosis(subject_id, participants_info)
                     
-                    entry = {
-                        'dataset': dataset_name,
-                        'site': dataset_name,  # Use dataset name as site
-                        'subject_id': subject_id,
-                        'session': session or '1',
-                        'task': 'rest',
-                        'input_path': str(func_file),
-                        'relative_path': str(func_file.relative_to(self.data_root)),
-                        'file_size_mb': round(func_file.stat().st_size / (1024 * 1024), 2),
-                        'diagnosis': diagnosis,
-                        'has_session_dir': 'ses-' in str(func_file)
-                    }
-                    dataset_subjects.append(entry)
+                    # Create entry for EACH run
+                    for i, func_file in enumerate(func_files):
+                        # Extract run number from filename
+                        import re
+                        run_match = re.search(r'run-(\d+)', func_file.name)
+                        run_number = run_match.group(1) if run_match else str(i+1)
+                        
+                        entry = {
+                            'dataset': dataset_name,
+                            'site': dataset_name,
+                            'subject_id': subject_id,
+                            'run': run_number,
+                            'session': '1',
+                            'task': 'rest',
+                            'input_path': str(func_file),
+                            'relative_path': str(func_file.relative_to(self.data_root)),
+                            'file_size_mb': round(func_file.stat().st_size / (1024 * 1024), 2),
+                            'diagnosis': diagnosis,
+                            'has_session_dir': 'ses-' in str(func_file)
+                        }
+                        dataset_subjects.append(entry)
         
-        subjects.extend(dataset_subjects)
+            # ✅ MOVE THESE INSIDE THE LOOP
+            subjects.extend(dataset_subjects)
+            
+            # Count runs vs subjects for THIS dataset
+            total_runs = len(dataset_subjects)
+            unique_subjects = len(set(s['subject_id'] for s in dataset_subjects))
+            print(f"Dataset {dataset_name}: {total_runs} runs from {unique_subjects} subjects")
 
-        # Single line output
-        sites = len(set(s['site'] for s in subjects))
-        print(f"Total discovered: {len(subjects)} subjects across {sites} sites")
+        # ✅ Final summary AFTER the loop completes
+        if subjects:
+            total_runs = len(subjects)
+            total_unique_subjects = len(set(s['subject_id'] for s in subjects))
+            total_sites = len(set(s['site'] for s in subjects))
+            
+            print(f"\nData Loading Summary")
+            print(f"Total: {total_runs} runs from {total_unique_subjects} subjects across {total_sites} sites")
+            
+            # Breakdown by site
+            site_stats = {}
+            for subj in subjects:
+                site = subj['site']
+                if site not in site_stats:
+                    site_stats[site] = {'runs': 0, 'subjects': set()}
+                site_stats[site]['runs'] += 1
+                site_stats[site]['subjects'].add(subj['subject_id'])
+            
+            print("Site breakdown:")
+            for site, stats in site_stats.items():
+                print(f"  {site}: {stats['runs']} runs from {len(stats['subjects'])} subjects")
+        else:
+            print("\nNo subjects discovered across any sites!")
+
         return subjects
 
-    def _find_functional_file(self, subject_dir: Path, subject_id: str) -> tuple:
-        """Find functional fMRI file with flexible ADHD-200 naming patterns"""
+    def _find_all_functional_files(self, subject_dir: Path) -> List[Path]:
+        """Find ALL functional files for a subject"""
         
-        # Define search patterns in priority order (most specific to most general)
-        search_patterns = [
-            # BIDS-compliant patterns
-            (f"ses-*/func/{subject_id}_ses-*_task-rest*_bold.nii.gz", "bids_session"),
-            (f"func/{subject_id}_ses-*_task-rest*_bold.nii.gz", "bids_no_session"),
-            (f"ses-*/func/{subject_id}_*task-rest*.nii.gz", "bids_flexible"),
-            
-            # ADHD-200 common patterns
-            (f"func/{subject_id}_task-rest*.nii.gz", "adhd200_task"),
-            (f"func/{subject_id}_rest*.nii.gz", "adhd200_rest"),
-            (f"func/{subject_id}_func*.nii.gz", "adhd200_func"),
-            (f"ses-*/func/{subject_id}_*.nii.gz", "session_any"),
-            (f"func/{subject_id}*.nii.gz", "func_any"),
-            
-            # Fallback patterns
-            (f"**/*rest*.nii.gz", "fallback_rest"),
-            (f"**/*bold*.nii.gz", "fallback_bold"),
-            (f"**/*func*.nii.gz", "fallback_func"),
-            (f"**/{subject_id}*.nii.gz", "fallback_subject"),
-        ]
+        nii_files = list(subject_dir.rglob("*.nii*"))
         
-        for pattern, pattern_type in search_patterns:
-            matches = list(subject_dir.glob(pattern))
-            
-            if matches:
-                # Prefer files with 'rest' or 'bold' in the name
-                best_match = self._select_best_functional_file(matches)
-                
-                if best_match:
-                    session = self._extract_session_from_path(best_match)
-                    return best_match, session
-        
-        return None, None
-
-    def _select_best_functional_file(self, candidates: List[Path]) -> Path:
-        """Select the best functional file from multiple candidates"""
-        if len(candidates) == 1:
-            return candidates[0]
-        
-        # Scoring system for file selection
-        scored_files = []
-        for file in candidates:
-            score = 0
+        functional_files = []
+        for file in nii_files:
             name_lower = file.name.lower()
             
-            # Prefer rest-state files
-            if 'rest' in name_lower:
-                score += 10
-            if 'bold' in name_lower:
-                score += 8
-            if 'task-rest' in name_lower:
-                score += 15
-            
-            # Prefer session 1
-            if 'ses-1' in name_lower:
-                score += 5
-            
-            # Prefer run 1
-            if 'run-1' in name_lower:
-                score += 3
-            
-            # Prefer shorter names (usually more standard)
-            score -= len(file.name) * 0.01
-            
-            scored_files.append((score, file))
+            # Skip anatomical scans
+            if any(skip in name_lower for skip in ['anat', 't1w', 't2w', 'flair', 'dwi']):
+                continue
+                
+            # Include functional files
+            if any(keyword in name_lower for keyword in ['rest', 'bold', 'func', 'task']):
+                functional_files.append(file)
         
-        # Return file with highest score
-        scored_files.sort(key=lambda x: x[0], reverse=True)
-        return scored_files[0][1]
-
-    def _extract_session_from_path(self, file_path: Path) -> str:
-        """Extract session from file path or name"""
-        path_str = str(file_path)
+        # Sort by run number for consistency
+        functional_files.sort(key=lambda x: x.name)
         
-        # Look for ses-X pattern
-        import re
-        ses_match = re.search(r'ses-(\d+)', path_str)
-        if ses_match:
-            return ses_match.group(1)
+        return functional_files
+
+    def _find_any_nii_file(self, subject_dir: Path) -> Path:
+        """Find any .nii or .nii.gz file in the subject directory with enhanced search"""
         
-        # Default to session 1
-        return '1'
-
-
+        print(f"  Searching in: {subject_dir.name}")
+        
+        # Look for .nii files recursively in the subject directory
+        nii_files = list(subject_dir.rglob("*.nii*"))
+        
+        print(f"    Found {len(nii_files)} .nii files total")
+        
+        if not nii_files:
+            # Debug: show what directories exist
+            subdirs = [d.name for d in subject_dir.iterdir() if d.is_dir()]
+            print(f"    Available subdirectories: {subdirs}")
+            return None
+        
+        # Debug: show first few files found
+        for i, file in enumerate(nii_files[:3]):
+            rel_path = file.relative_to(subject_dir)
+            size_mb = file.stat().st_size / (1024*1024)
+            print(f"      {i+1}. {rel_path} ({size_mb:.1f}MB)")
+        
+        # If multiple files, prefer larger ones (likely functional data)
+        nii_files.sort(key=lambda x: x.stat().st_size, reverse=True)
+        
+        # Filter out obviously non-functional files
+        functional_candidates = []
+        for file in nii_files:
+            name_lower = file.name.lower()
+            
+            # Skip anatomical scans
+            if any(skip in name_lower for skip in ['anat', 't1w', 't2w', 'flair', 'dwi']):
+                continue
+                
+            # Prefer files with functional keywords
+            if any(keyword in name_lower for keyword in ['rest', 'bold', 'func', 'task']):
+                functional_candidates.append(file)
+                print(f"    ✅ FUNCTIONAL candidate: {file.name}")
+        
+        # Return the first functional candidate, or the largest file if no clear functional files
+        if functional_candidates:
+            selected = functional_candidates[0]
+            print(f"    🎯 SELECTED: {selected.relative_to(subject_dir)}")
+            return selected
+        elif nii_files:
+            # Return largest file (likely functional if it's big enough)
+            largest_file = nii_files[0]
+            size_mb = largest_file.stat().st_size / (1024*1024)
+            if size_mb > 50:  # > 50MB
+                print(f"Selected (large file): {largest_file.name} ({size_mb:.1f}MB)")
+                return largest_file
+            else:
+                print(f"Largest file too small: {largest_file.name} ({size_mb:.1f}MB)")
+        
+        return None
 
     def _get_diagnosis(self, subject_id: str, participants_info: Dict) -> int:
         """Get diagnosis for subject (0=Control, 1=ADHD)"""
@@ -174,10 +198,10 @@ class DataDiscovery:
 
     @staticmethod
     def save_metadata(subjects: List[Dict[str, Any]], output_path: Path):
-        """Save subjects metadata to CSV with summary"""
+        """Save subjects metadata to CSV"""
         df = pd.DataFrame(subjects)
         df.to_csv(output_path, index=False)
-        # No additional output
+        print(f"Saved metadata for {len(subjects)} subjects to {output_path}")
 
     def _load_participants_info(self, dataset_dir: Path) -> Dict:
         """Load participants.tsv or phenotypic data for diagnosis information"""
@@ -236,14 +260,13 @@ class DataDiscovery:
                                     
                                     participants_info[subj_id] = diagnosis
                                 
-
                                 return participants_info
                                 
                         except:
                             continue
                         
                 except Exception as e:
-                    print(f"  ⚠️ Error reading {metadata_file}: {e}")
+                    print(f"Error reading {metadata_file}: {e}")
                     continue
     
         return participants_info
