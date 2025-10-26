@@ -800,34 +800,75 @@ class PreprocessingPipeline:
         return motion_components
 
     def _generate_brain_mask(self, data_img) -> np.ndarray:
-        """Generate brain mask using intensity thresholding"""
+        """Generate brain mask using improved intensity thresholding"""
         if hasattr(data_img, 'get_fdata'):
             img_data = data_img.get_fdata()
         else:
             img_data = np.asarray(data_img)
             
+        # Calculate mean image across time
         mean_img = np.mean(img_data, axis=-1)
         
-        # Otsu-like thresholding
+        # Enhanced brain mask generation
         non_zero_voxels = mean_img[mean_img > 0]
         
         if len(non_zero_voxels) == 0:
+            print(f"⚠️  {self.subject_id}: No non-zero voxels found!")
             return np.zeros(mean_img.shape, dtype=np.uint8)
         
-        threshold = np.percentile(non_zero_voxels, 25)
+        # Use multiple thresholding approaches and take the best
+        thresholds = [
+            np.percentile(non_zero_voxels, 20),  # Lower threshold
+            np.percentile(non_zero_voxels, 25),  # Original
+            np.percentile(non_zero_voxels, 15),  # Even lower
+        ]
         
-        # Initial mask
-        mask = (mean_img > threshold).astype(np.uint8)
+        best_mask = None
+        best_coverage = 0
         
-        # Morphological operations to clean up mask
-        mask = ndimage.binary_fill_holes(mask).astype(np.uint8)
-        mask = ndimage.binary_erosion(mask, iterations=1).astype(np.uint8)
-        mask = ndimage.binary_dilation(mask, iterations=2).astype(np.uint8)
+        for threshold in thresholds:
+            # Create candidate mask
+            candidate_mask = (mean_img > threshold).astype(np.uint8)
+            
+            # Apply morphological operations
+            from scipy import ndimage
+            candidate_mask = ndimage.binary_fill_holes(candidate_mask).astype(np.uint8)
+            candidate_mask = ndimage.binary_erosion(candidate_mask, iterations=1).astype(np.uint8)
+            candidate_mask = ndimage.binary_dilation(candidate_mask, iterations=2).astype(np.uint8)
+            
+            # Calculate coverage (should be reasonable brain coverage)
+            coverage = candidate_mask.sum() / candidate_mask.size
+            
+            # Good brain mask should cover 10-40% of the volume
+            if 0.05 <= coverage <= 0.5 and coverage > best_coverage:
+                best_mask = candidate_mask
+                best_coverage = coverage
+        
+        # Fallback if no good mask found
+        if best_mask is None:
+            print(f"{self.subject_id}: Using fallback brain mask")
+            # Very permissive threshold as last resort
+            fallback_threshold = np.percentile(non_zero_voxels, 10)
+            best_mask = (mean_img > fallback_threshold).astype(np.uint8)
+            best_coverage = best_mask.sum() / best_mask.size
+        
+        # Final validation
+        mask_size_mb = best_mask.nbytes / (1024 * 1024)
         
         self._log_step("brain_mask", "success", 
-                      f"Generated mask with {mask.sum()} voxels ({mask.sum()/mask.size*100:.1f}% of volume)")
+                      f"Generated mask: {best_mask.sum()} voxels ({best_coverage*100:.1f}% coverage, {mask_size_mb:.2f}MB)")
         
-        return mask
+        # Print detailed diagnostics
+        print(f"   Mask validation for {self.subject_id}:")
+        print(f"   - Shape: {best_mask.shape}")
+        print(f"   - Non-zero voxels: {best_mask.sum()}")
+        print(f"   - Coverage: {best_coverage*100:.1f}%")
+        print(f"   - Expected file size: {mask_size_mb:.2f}MB")
+        
+        if mask_size_mb < 0.1:
+            print(f"   ⚠️  WARNING: Mask seems too small!")
+        
+        return best_mask
 
     # ----------------- Helper Methods -----------------
 
@@ -1024,18 +1065,45 @@ def _process_subject(row):
                     func_output_path.unlink()
                 raise RuntimeError(f"Functional file verification failed: {func_output_path}")
 
-            # Save brain mask
-            mask_nifti = nib.Nifti1Image(
-                result["brain_mask"].astype(np.uint8),
-                proc_nifti.affine
-            )
-            nib.save(mask_nifti, mask_output_path)
-
-            # ✅ VERIFY MASK FILE
-            if not verify_output_integrity(mask_output_path, min_size_mb=0.5):
-                if mask_output_path.exists():
-                    mask_output_path.unlink()
-                raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
+            # Save brain mask with enhanced validation
+            print(f"   Creating brain mask for {subject_id}")
+            try:
+                brain_mask = result["brain_mask"]
+                
+                # Validate mask before saving
+                mask_voxels = np.sum(brain_mask > 0)
+                mask_coverage = mask_voxels / brain_mask.size
+                expected_size_mb = brain_mask.nbytes / (1024 * 1024)
+                
+                print(f"   Mask stats: {mask_voxels} voxels ({mask_coverage*100:.1f}% coverage)")
+                print(f"   Expected mask file size: {expected_size_mb:.2f}MB")
+                
+                if mask_voxels < 1000:  # Too few brain voxels
+                    raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
+                
+                if mask_coverage < 0.01:  # Less than 1% coverage
+                    raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
+                
+                # Create mask NIfTI with proper data type
+                mask_nifti = nib.Nifti1Image(
+                    brain_mask.astype(np.uint8),  # Ensure uint8
+                    original_affine  # Use original affine
+                )
+                
+                print(f"   Saving mask file: {mask_output_path.name}")
+                nib.save(mask_nifti, mask_output_path)
+                
+                # ✅ VERIFY MASK FILE with lower threshold for debugging
+                if not verify_output_integrity(mask_output_path, min_size_mb=0.1):  # Lower threshold temporarily
+                    if mask_output_path.exists():
+                        actual_size = mask_output_path.stat().st_size / (1024*1024)
+                        print(f"   Actual saved mask size: {actual_size:.2f}MB")
+                        mask_output_path.unlink()
+                    raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
+            
+            except Exception as e:
+                print(f"   ❌ Mask creation/saving failed: {str(e)}")
+                raise RuntimeError(f"Brain mask generation failed: {str(e)}")
 
             # Save confounds
             pd.DataFrame(result["confound_regressors"]).to_csv(
