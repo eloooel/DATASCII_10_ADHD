@@ -10,6 +10,7 @@ from scipy import signal, ndimage
 from scipy.stats import pearsonr
 from sklearn.decomposition import PCA, FastICA
 import pandas as pd
+import gzip
 
 from nilearn.datasets import load_mni152_template
 from utils import run_parallel
@@ -286,8 +287,8 @@ class PreprocessingPipeline:
 
     # Convert back to tensor if input was tensor
         if torch.is_tensor(data_img):
-            corrected_data = torch.from_numpy(corrected_data).to(self.device)
-            return corrected_data, motion_params
+            corrected_data_tensor = torch.from_numpy(corrected_data).to(self.device)
+            return corrected_data_tensor, motion_params
         else:
             # Create corrected nibabel image
             corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
@@ -861,10 +862,76 @@ class PreprocessingPipeline:
         }
 
 
-def _process_subject(row):  # Remove pbar parameter
-    """Process a single subject; returns result dict, no printing inside."""
+def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0) -> bool:
+    """
+    Verify that a NIfTI file was written correctly and is not corrupted
+    
+    Args:
+        output_path: Path to the .nii.gz file to verify
+        min_size_mb: Minimum expected file size in MB
+    
+    Returns:
+        True if file is valid, False if corrupted
+    """
+    if not output_path.exists():
+        print(f"❌ Verification failed: File does not exist: {output_path}")
+        return False
+    
     try:
-        # Get device from row if available, otherwise use default
+        # Check file size
+        file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        if file_size_mb < min_size_mb:
+            print(f"❌ Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
+            return False
+        
+        # Test gzip integrity
+        if output_path.suffix == '.gz':
+            try:
+                with gzip.open(output_path, 'rb') as f:
+                    # Read first 1MB to test decompression
+                    chunk = f.read(1024 * 1024)
+                    if len(chunk) == 0:
+                        print(f"❌ Verification failed: Gzip file appears empty: {output_path}")
+                        return False
+            except Exception as gz_error:
+                print(f"❌ Verification failed: Gzip corruption in {output_path}: {gz_error}")
+                return False
+        
+        # Test NIfTI loading
+        try:
+            import nibabel as nib
+            img = nib.load(output_path)
+            
+            # Basic shape validation
+            if len(img.shape) < 3:
+                print(f"❌ Verification failed: Invalid dimensions {img.shape}: {output_path}")
+                return False
+            
+            # Test reading a small sample of data
+            if len(img.shape) == 4:
+                test_data = img.get_fdata()[:5, :5, :5, :1]  # Small 4D sample
+            else:
+                test_data = img.get_fdata()[:5, :5, :5]  # Small 3D sample
+            
+            if test_data is None or test_data.size == 0:
+                print(f"❌ Verification failed: Cannot read NIfTI data: {output_path}")
+                return False
+                
+        except Exception as nii_error:
+            print(f"❌ Verification failed: NIfTI loading error in {output_path}: {nii_error}")
+            return False
+        
+        print(f"✅ Verification passed: {output_path.name} ({file_size_mb:.1f}MB)")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Verification failed: Unexpected error in {output_path}: {e}")
+        return False
+
+def _process_subject(row):
+    """Process a single subject with output verification"""
+    try:
+        # Get device from row if available
         device = row.get('device', None)
         if device and isinstance(device, str):
             device = torch.device(device)
@@ -873,61 +940,104 @@ def _process_subject(row):  # Remove pbar parameter
         subject_id = row["subject_id"]
         func_path = Path(row["input_path"])
 
-        # Extract site from multiple possible sources
+        # Extract site name
         site_name = (
             row.get("site") or 
             row.get("dataset") or 
             func_path.parts[-5] if len(func_path.parts) >= 5 else "UnknownSite"
         )
 
-
-        # Verify file exists and is readable
+        # Verify input file exists
         if not func_path.exists():
             raise FileNotFoundError(f"Input file not found: {func_path.absolute()}")
+        
         if not func_path.is_file():
             raise ValueError(f"Input path is not a file: {func_path.absolute()}")
-
 
         # Check file extension
         if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
             raise ValueError(f"Invalid file extension. Expected .nii or .nii.gz, got: {func_path.suffix}")
 
-        # Create output directory before processing
+        # Create output directory
         subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
         subj_out.mkdir(parents=True, exist_ok=True)
 
-        # Try to load the NIfTI file with explicit error handling
+        # Define output paths
+        func_output_path = subj_out / "func_preproc.nii.gz"
+        mask_output_path = subj_out / "mask.nii.gz"
+
+        # Skip if outputs already exist and are verified
+        if func_output_path.exists() and mask_output_path.exists():
+            if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
+                verify_output_integrity(mask_output_path, min_size_mb=0.5)):
+                return {
+                    "status": "success",
+                    "subject_id": subject_id,
+                    "site": site_name,
+                    "output_dir": str(subj_out),
+                    "files_verified": True,
+                    "skipped": True,
+                    "message": f"Already processed and verified: {subject_id}"
+                }
+
+        # Test NIfTI loading
         try:
             test_load = nib.load(str(func_path.absolute()))
         except Exception as e:
-            print(f"[ERROR] Failed to load NIfTI file: {func_path.absolute()}")
-            print(f"Reason: {str(e)}")
             raise ValueError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
 
         # Run preprocessing
         result = pipeline.process(str(func_path.absolute()), subject_id)
 
         if result["status"] == "success":
-            # Ensure processed_data is a Nifti1Image
+            # Get processed data
             proc_data = result["processed_data"]
+            
+            # Ensure it's a NIfTI image
             if torch.is_tensor(proc_data):
                 proc_array = proc_data.cpu().numpy()
-                proc_nifti = nib.Nifti1Image(proc_array, np.eye(4))  # Use identity affine if unknown
+                
+                # Get the original affine from the result or pipeline
+                if hasattr(result, 'metadata') and 'affine' in result['metadata']:
+                    affine = result['metadata']['affine']
+                elif hasattr(pipeline, 'metadata') and 'affine' in pipeline.metadata:
+                    affine = pipeline.metadata['affine']
+                else:
+                    # Load original to get affine
+                    original_img = nib.load(str(func_path.absolute()))
+                    affine = original_img.affine
+
+                proc_nifti = nib.Nifti1Image(proc_array, affine)
             elif isinstance(proc_data, nib.Nifti1Image):
                 proc_nifti = proc_data
             else:
-                # fallback
-                proc_nifti = nib.Nifti1Image(np.array(proc_data), np.eye(4))
+                original_img = nib.load(str(func_path.absolute()))
+                affine = original_img.affine
+                proc_nifti = nib.Nifti1Image(np.array(proc_data), affine)
+                
+            # Save functional file
+            nib.save(proc_nifti, func_output_path)
 
-            # Save preprocessed functional image
-            nib.save(proc_nifti, subj_out / "func_preproc.nii.gz")
+            # ✅ VERIFY FUNCTIONAL FILE
+            if not verify_output_integrity(func_output_path, min_size_mb=10.0):
+                if func_output_path.exists():
+                    func_output_path.unlink()
+                raise RuntimeError(f"Functional file verification failed: {func_output_path}")
 
-            # Save brain mask using the same affine as proc_nifti
-            mask_nifti = nib.Nifti1Image(result["brain_mask"].astype(np.uint8),
-                                        proc_nifti.affine)
-            nib.save(mask_nifti, subj_out / "mask.nii.gz")
+            # Save brain mask
+            mask_nifti = nib.Nifti1Image(
+                result["brain_mask"].astype(np.uint8),
+                proc_nifti.affine
+            )
+            nib.save(mask_nifti, mask_output_path)
 
-            # Save confound regressors
+            # ✅ VERIFY MASK FILE
+            if not verify_output_integrity(mask_output_path, min_size_mb=0.5):
+                if mask_output_path.exists():
+                    mask_output_path.unlink()
+                raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
+
+            # Save confounds
             pd.DataFrame(result["confound_regressors"]).to_csv(
                 subj_out / "confounds.csv", index=False
             )
@@ -935,24 +1045,23 @@ def _process_subject(row):  # Remove pbar parameter
             return {
                 "status": "success",
                 "subject_id": subject_id,
-                "site": site_name,  # Make sure site is included in return
-                "message": f"Preprocessed {subject_id} (Site: {site_name})"
+                "site": site_name,
+                "output_dir": str(subj_out),
+                "files_verified": True,
+                "func_size_mb": func_output_path.stat().st_size / (1024*1024),
+                "mask_size_mb": mask_output_path.stat().st_size / (1024*1024),
+                "message": f"Preprocessed {subject_id} successfully"
             }
         else:
             raise RuntimeError(f"Pipeline failed: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
-        import traceback
-        print(f"\nError processing subject {row.get('subject_id', 'unknown')}:")
-        print(f"Error type: {type(e).__name__}")
-        print(f"Error message: {str(e)}")
-        print("Full traceback:")
-        print(traceback.format_exc())
         return {
             "status": "failed",
             "subject_id": row.get("subject_id", "unknown"),
             "site": row.get("site", "UnknownSite"),
             "error": str(e),
+            "error_type": "preprocessing_with_verification",
             "message": f"Failed: {str(e)}"
         }
 

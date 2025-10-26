@@ -131,117 +131,187 @@ class FeatureExtractor:
 # ----------------- Batch Processing -----------------
 
 def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list, parcellation_path: Path = None):
-    """Worker function for feature extraction"""
+    """Worker function for feature extraction - with comprehensive file corruption handling"""
+    import gzip
+    import os
+    
     subject_id = None
     site = None
     
     try:
         subject_id = row["subject_id"]
-        site = row.get("site", row.get("dataset", Path(row["input_path"]).parts[-5] if len(Path(row["input_path"]).parts) >= 5 else "UnknownSite"))
+        site = row.get("site", row.get("dataset", "UnknownSite"))
         
         print(f"🔄 Processing {site}/{subject_id}")
         
-        # Update paths for NIfTI files
         func_path = preproc_dir / site / subject_id / "func_preproc.nii.gz"
         mask_path = preproc_dir / site / subject_id / "mask.nii.gz"
 
-        # Create site-specific feature output directory
         site_feature_dir = feature_out_dir / site
         site_feature_dir.mkdir(parents=True, exist_ok=True)
 
-        # ✅ DETAILED FILE EXISTENCE CHECKS
-        if not func_path.exists():
-            print(f"❌ {subject_id}: Missing functional file")
-            print(f"   Expected: {func_path}")
-            print(f"   Parent dir exists: {func_path.parent.exists()}")
-            if func_path.parent.exists():
-                available_files = list(func_path.parent.glob("*.nii*"))
-                print(f"   Available files: {[f.name for f in available_files]}")
-            
-            return {
-                "status": "failed",
-                "subject_id": subject_id,
-                "site": site,
-                "error": f"Missing preprocessed functional file",
-                "error_type": "missing_preprocessing",
-                "error_details": {
-                    "missing_file": str(func_path),
-                    "parent_exists": func_path.parent.exists(),
-                    "available_files": [f.name for f in func_path.parent.glob("*.nii*")] if func_path.parent.exists() else []
-                }
+        # ✅ COMPREHENSIVE FILE CORRUPTION DETECTION
+        def validate_gzipped_nifti(file_path: Path) -> dict:
+            """Comprehensive validation of gzipped NIfTI files"""
+            validation = {
+                'exists': file_path.exists(),
+                'readable': False,
+                'size_mb': 0,
+                'gzip_valid': False,
+                'nifti_loadable': False,
+                'corruption_type': None,
+                'error_message': None
             }
-
-        if not mask_path.exists():
-            print(f"❌ {subject_id}: Missing mask file")
-            print(f"   Expected: {mask_path}")
             
-            return {
-                "status": "failed",
-                "subject_id": subject_id,
-                "site": site,
-                "error": f"Missing mask file",
-                "error_type": "missing_preprocessing",
-                "error_details": {
-                    "missing_file": str(mask_path),
-                    "func_exists": func_path.exists()
-                }
-            }
-
-        # ✅ DETAILED NIFTI LOADING
-        print(f"📁 Loading NIfTI files for {subject_id}")
-        try:
-            func_img = nib.load(func_path)
-            func_data = func_img.get_fdata()
-            print(f"   Functional data shape: {func_data.shape}")
+            if not validation['exists']:
+                validation['error_message'] = f"File does not exist: {file_path}"
+                return validation
             
-            if func_data.ndim != 4:
-                raise ValueError(f"Functional data should be 4D, got {func_data.ndim}D")
-            
-            if func_data.shape[-1] < 50:  # Check minimum timepoints
-                raise ValueError(f"Too few timepoints: {func_data.shape[-1]} (minimum 50 expected)")
+            try:
+                # Check file size
+                file_size = file_path.stat().st_size
+                validation['size_mb'] = file_size / (1024 * 1024)
                 
-        except Exception as e:
-            print(f"❌ {subject_id}: Error loading functional file")
-            print(f"   Error: {str(e)}")
+                if file_size == 0:
+                    validation['error_message'] = "File is empty (0 bytes)"
+                    validation['corruption_type'] = 'empty_file'
+                    return validation
+                
+                # Test gzip integrity first
+                print(f"   🔍 Testing gzip integrity for {file_path.name}")
+                try:
+                    with gzip.open(file_path, 'rb') as gz_file:
+                        # Try to read the entire file in chunks to detect corruption
+                        chunk_size = 1024 * 1024  # 1MB chunks
+                        total_read = 0
+                        
+                        while True:
+                            chunk = gz_file.read(chunk_size)
+                            if not chunk:
+                                break
+                            total_read += len(chunk)
+                        
+                        print(f"   ✅ Gzip decompression successful: {total_read / (1024*1024):.1f}MB decompressed")
+                        validation['gzip_valid'] = True
+                        
+                except Exception as gz_error:
+                    error_msg = str(gz_error)
+                    print(f"   ❌ Gzip corruption detected: {error_msg}")
+                    
+                    # Categorize gzip errors
+                    if "invalid stored block lengths" in error_msg:
+                        validation['corruption_type'] = 'gzip_block_corruption'
+                    elif "invalid block type" in error_msg:
+                        validation['corruption_type'] = 'gzip_header_corruption'
+                    elif "unexpected end of file" in error_msg:
+                        validation['corruption_type'] = 'truncated_file'
+                    else:
+                        validation['corruption_type'] = 'unknown_gzip_error'
+                    
+                    validation['error_message'] = f"Gzip corruption: {error_msg}"
+                    return validation
+                
+                # Test NIfTI loading
+                print(f"   🧠 Testing NIfTI loading for {file_path.name}")
+                try:
+                    import nibabel as nib
+                    img = nib.load(file_path)
+                    data_shape = img.shape
+                    
+                    # Basic shape validation
+                    if len(data_shape) < 3:
+                        validation['error_message'] = f"Invalid NIfTI dimensions: {data_shape}"
+                        validation['corruption_type'] = 'invalid_dimensions'
+                        return validation
+                    
+                    # Try to access a small portion of data to ensure it's readable
+                    if len(data_shape) == 4:
+                        test_data = img.get_fdata()[:10, :10, :10, :5]  # Small sample
+                    else:
+                        test_data = img.get_fdata()[:10, :10, :10]  # Small sample
+                    
+                    print(f"   ✅ NIfTI loading successful: shape {data_shape}")
+                    validation['nifti_loadable'] = True
+                    validation['readable'] = True
+                    
+                except Exception as nii_error:
+                    error_msg = str(nii_error)
+                    print(f"   ❌ NIfTI loading failed: {error_msg}")
+                    
+                    if "invalid stored block lengths" in error_msg:
+                        validation['corruption_type'] = 'gzip_block_corruption'
+                    else:
+                        validation['corruption_type'] = 'nifti_format_error'
+                    
+                    validation['error_message'] = f"NIfTI loading failed: {error_msg}"
+                    return validation
+                
+            except Exception as e:
+                validation['error_message'] = f"File validation error: {str(e)}"
+                validation['corruption_type'] = 'validation_error'
+                return validation
+            
+            return validation
+
+        # Validate functional file
+        print(f"📁 Validating functional file: {func_path.name}")
+        func_validation = validate_gzipped_nifti(func_path)
+        
+        if not func_validation['readable']:
+            print(f"❌ {subject_id}: Functional file corrupted")
+            print(f"   File: {func_path}")
+            print(f"   Size: {func_validation['size_mb']:.2f}MB")
+            print(f"   Corruption type: {func_validation['corruption_type']}")
+            print(f"   Error: {func_validation['error_message']}")
             
             return {
                 "status": "failed",
                 "subject_id": subject_id,
                 "site": site,
-                "error": f"Failed to load functional NIfTI: {str(e)}",
-                "error_type": "nifti_loading_error",
+                "error": f"Functional file corrupted: {func_validation['error_message']}",
+                "error_type": "file_corruption",
                 "error_details": {
                     "file_path": str(func_path),
-                    "file_size_mb": func_path.stat().st_size / (1024*1024) if func_path.exists() else 0,
-                    "detailed_error": str(e)
+                    "corruption_type": func_validation['corruption_type'],
+                    "file_size_mb": func_validation['size_mb'],
+                    "validation_result": func_validation
                 }
             }
 
-        try:
-            mask_img = nib.load(mask_path)
-            mask_data = mask_img.get_fdata()
-            print(f"   Mask data shape: {mask_data.shape}")
-            
-            if mask_data.shape != func_data.shape[:3]:
-                raise ValueError(f"Mask shape {mask_data.shape} doesn't match functional shape {func_data.shape[:3]}")
-                
-        except Exception as e:
-            print(f"❌ {subject_id}: Error loading mask file")
-            print(f"   Error: {str(e)}")
+        # Validate mask file
+        print(f"📁 Validating mask file: {mask_path.name}")
+        mask_validation = validate_gzipped_nifti(mask_path)
+        
+        if not mask_validation['readable']:
+            print(f"❌ {subject_id}: Mask file corrupted")
+            print(f"   File: {mask_path}")
+            print(f"   Corruption type: {mask_validation['corruption_type']}")
             
             return {
                 "status": "failed",
                 "subject_id": subject_id,
                 "site": site,
-                "error": f"Failed to load mask NIfTI: {str(e)}",
-                "error_type": "nifti_loading_error",
+                "error": f"Mask file corrupted: {mask_validation['error_message']}",
+                "error_type": "file_corruption",
                 "error_details": {
                     "file_path": str(mask_path),
-                    "file_size_mb": mask_path.stat().st_size / (1024*1024) if mask_path.exists() else 0,
-                    "detailed_error": str(e)
+                    "corruption_type": mask_validation['corruption_type'],
+                    "validation_result": mask_validation
                 }
             }
 
+        # If we get here, files are valid - proceed with normal loading
+        print(f"📊 Loading validated NIfTI files for {subject_id}")
+        func_img = nib.load(func_path)
+        func_data = func_img.get_fdata()
+        
+        mask_img = nib.load(mask_path)
+        mask_data = mask_img.get_fdata()
+        
+        print(f"   Functional shape: {func_data.shape}")
+        print(f"   Mask shape: {mask_data.shape}")
+
+        # Continue with rest of processing (parcellation, ROI extraction, etc.)
         # ✅ DETAILED PARCELLATION LOADING
         print(f"🧠 Loading parcellation for {subject_id}")
         try:
@@ -357,10 +427,6 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
     except Exception as e:
         print(f"❌ {subject_id or 'Unknown'}: Unexpected error")
         print(f"   Error: {str(e)}")
-        print(f"   Type: {type(e).__name__}")
-        
-        import traceback
-        traceback.print_exc()
         
         return {
             "status": "failed",
@@ -369,8 +435,6 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
             "error": f"Unexpected error: {str(e)}",
             "error_type": "unexpected_error",
             "error_details": {
-                "exception_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
                 "detailed_error": str(e)
             }
         }
