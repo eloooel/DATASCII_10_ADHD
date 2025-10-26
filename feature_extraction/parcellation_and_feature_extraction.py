@@ -131,16 +131,17 @@ class FeatureExtractor:
 # ----------------- Batch Processing -----------------
 
 def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list, parcellation_path: Path = None):
-    """Worker function for feature extraction - fails if parcellation unavailable"""
+    """Worker function for feature extraction"""
     subject_id = None
     site = None
     
     try:
         subject_id = row["subject_id"]
-        # Consistent site extraction logic
         site = row.get("site", row.get("dataset", Path(row["input_path"]).parts[-5] if len(Path(row["input_path"]).parts) >= 5 else "UnknownSite"))
         
-        # Update paths for NIfTI files with correct site handling
+        print(f"🔄 Processing {site}/{subject_id}")
+        
+        # Update paths for NIfTI files
         func_path = preproc_dir / site / subject_id / "func_preproc.nii.gz"
         mask_path = preproc_dir / site / subject_id / "mask.nii.gz"
 
@@ -148,64 +149,230 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         site_feature_dir = feature_out_dir / site
         site_feature_dir.mkdir(parents=True, exist_ok=True)
 
-        # Check preprocessing existence
+        # ✅ DETAILED FILE EXISTENCE CHECKS
         if not func_path.exists():
+            print(f"❌ {subject_id}: Missing functional file")
+            print(f"   Expected: {func_path}")
+            print(f"   Parent dir exists: {func_path.parent.exists()}")
+            if func_path.parent.exists():
+                available_files = list(func_path.parent.glob("*.nii*"))
+                print(f"   Available files: {[f.name for f in available_files]}")
+            
             return {
                 "status": "failed",
                 "subject_id": subject_id,
                 "site": site,
-                "error": f"Missing preprocessed file: {func_path}",
-                "error_type": "missing_preprocessing"
+                "error": f"Missing preprocessed functional file",
+                "error_type": "missing_preprocessing",
+                "error_details": {
+                    "missing_file": str(func_path),
+                    "parent_exists": func_path.parent.exists(),
+                    "available_files": [f.name for f in func_path.parent.glob("*.nii*")] if func_path.parent.exists() else []
+                }
             }
 
         if not mask_path.exists():
+            print(f"❌ {subject_id}: Missing mask file")
+            print(f"   Expected: {mask_path}")
+            
             return {
                 "status": "failed",
                 "subject_id": subject_id,
                 "site": site,
-                "error": f"Missing mask file: {mask_path}",
-                "error_type": "missing_preprocessing"
+                "error": f"Missing mask file",
+                "error_type": "missing_preprocessing",
+                "error_details": {
+                    "missing_file": str(mask_path),
+                    "func_exists": func_path.exists()
+                }
             }
 
-        # Load NIfTI data
-        func_img = nib.load(func_path)
-        mask_img = nib.load(mask_path)
-        
-        func_data = func_img.get_fdata()
-        mask_data = mask_img.get_fdata()
-        
-        # Initialize parcellation with path - ✅ FIXED
-        parcellation = SchaeferParcellation(parcellation_path)  # ✅ Pass the path!
-        if not parcellation.load_parcellation():
+        # ✅ DETAILED NIFTI LOADING
+        print(f"📁 Loading NIfTI files for {subject_id}")
+        try:
+            func_img = nib.load(func_path)
+            func_data = func_img.get_fdata()
+            print(f"   Functional data shape: {func_data.shape}")
+            
+            if func_data.ndim != 4:
+                raise ValueError(f"Functional data should be 4D, got {func_data.ndim}D")
+            
+            if func_data.shape[-1] < 50:  # Check minimum timepoints
+                raise ValueError(f"Too few timepoints: {func_data.shape[-1]} (minimum 50 expected)")
+                
+        except Exception as e:
+            print(f"❌ {subject_id}: Error loading functional file")
+            print(f"   Error: {str(e)}")
+            
             return {
-                "status": "failed", 
-                "subject_id": subject_id, 
+                "status": "failed",
+                "subject_id": subject_id,
                 "site": site,
-                "error": f"Failed to load Schaefer parcellation from {parcellation_path}",
-                "error_type": "parcellation_unavailable"
+                "error": f"Failed to load functional NIfTI: {str(e)}",
+                "error_type": "nifti_loading_error",
+                "error_details": {
+                    "file_path": str(func_path),
+                    "file_size_mb": func_path.stat().st_size / (1024*1024) if func_path.exists() else 0,
+                    "detailed_error": str(e)
+                }
+            }
+
+        try:
+            mask_img = nib.load(mask_path)
+            mask_data = mask_img.get_fdata()
+            print(f"   Mask data shape: {mask_data.shape}")
+            
+            if mask_data.shape != func_data.shape[:3]:
+                raise ValueError(f"Mask shape {mask_data.shape} doesn't match functional shape {func_data.shape[:3]}")
+                
+        except Exception as e:
+            print(f"❌ {subject_id}: Error loading mask file")
+            print(f"   Error: {str(e)}")
+            
+            return {
+                "status": "failed",
+                "subject_id": subject_id,
+                "site": site,
+                "error": f"Failed to load mask NIfTI: {str(e)}",
+                "error_type": "nifti_loading_error",
+                "error_details": {
+                    "file_path": str(mask_path),
+                    "file_size_mb": mask_path.stat().st_size / (1024*1024) if mask_path.exists() else 0,
+                    "detailed_error": str(e)
+                }
+            }
+
+        # ✅ DETAILED PARCELLATION LOADING
+        print(f"🧠 Loading parcellation for {subject_id}")
+        try:
+            parcellation = SchaeferParcellation(parcellation_path)
+            if not parcellation.load_parcellation():
+                print(f"❌ {subject_id}: Parcellation loading failed")
+                print(f"   Atlas path: {parcellation_path}")
+                print(f"   Atlas exists: {parcellation_path.exists() if parcellation_path else False}")
+                
+                return {
+                    "status": "failed", 
+                    "subject_id": subject_id, 
+                    "site": site,
+                    "error": f"Failed to load Schaefer parcellation",
+                    "error_type": "parcellation_unavailable",
+                    "error_details": {
+                        "parcellation_path": str(parcellation_path) if parcellation_path else "None",
+                        "path_exists": parcellation_path.exists() if parcellation_path else False
+                    }
+                }
+        except Exception as e:
+            print(f"❌ {subject_id}: Parcellation error")
+            print(f"   Error: {str(e)}")
+            
+            return {
+                "status": "failed",
+                "subject_id": subject_id,
+                "site": site,
+                "error": f"Parcellation error: {str(e)}",
+                "error_type": "parcellation_error",
+                "error_details": {
+                    "detailed_error": str(e),
+                    "parcellation_path": str(parcellation_path) if parcellation_path else "None"
+                }
             }
             
-        # Extract ROI timeseries
-        roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
+        # ✅ DETAILED ROI EXTRACTION
+        print(f"🎯 Extracting ROI timeseries for {subject_id}")
+        try:
+            roi_timeseries = parcellation.extract_roi_timeseries(func_data, mask_data)
+            print(f"   ROI timeseries shape: {roi_timeseries.shape}")
+            
+            if roi_timeseries.shape[1] != 200:
+                raise ValueError(f"Expected 200 ROIs, got {roi_timeseries.shape[1]}")
+            
+            # Check for NaN or infinite values
+            if np.any(np.isnan(roi_timeseries)):
+                print(f"⚠️  {subject_id}: NaN values detected in ROI timeseries")
+            
+            if np.any(np.isinf(roi_timeseries)):
+                print(f"⚠️  {subject_id}: Infinite values detected in ROI timeseries")
+                
+        except Exception as e:
+            print(f"❌ {subject_id}: ROI extraction failed")
+            print(f"   Error: {str(e)}")
+            
+            return {
+                "status": "failed",
+                "subject_id": subject_id,
+                "site": site,
+                "error": f"ROI extraction failed: {str(e)}",
+                "error_type": "roi_extraction_error",
+                "error_details": {
+                    "func_shape": func_data.shape,
+                    "mask_shape": mask_data.shape,
+                    "detailed_error": str(e)
+                }
+            }
 
-        # Save features
-        extractor = FeatureExtractor(site_feature_dir, atlas_labels)
-        outputs = extractor.process_subject(subject_id, roi_timeseries)
+        # ✅ DETAILED FEATURE SAVING
+        print(f"💾 Saving features for {subject_id}")
+        try:
+            extractor = FeatureExtractor(site_feature_dir, atlas_labels)
+            outputs = extractor.process_subject(subject_id, roi_timeseries)
+            
+            # Verify outputs were created
+            for output_type, output_path in outputs.items():
+                if not Path(output_path).exists():
+                    raise FileNotFoundError(f"Failed to create {output_type}: {output_path}")
+            
+            print(f"✅ {subject_id}: Success")
+            
+        except Exception as e:
+            print(f"❌ {subject_id}: Feature saving failed")
+            print(f"   Error: {str(e)}")
+            
+            return {
+                "status": "failed",
+                "subject_id": subject_id,
+                "site": site,
+                "error": f"Feature saving failed: {str(e)}",
+                "error_type": "feature_saving_error",
+                "error_details": {
+                    "output_dir": str(site_feature_dir),
+                    "detailed_error": str(e)
+                }
+            }
 
         return {
             "subject_id": subject_id, 
             "site": site, 
             "status": "success", 
-            "outputs": outputs
+            "outputs": outputs,
+            "processing_info": {
+                "func_shape": func_data.shape,
+                "mask_shape": mask_data.shape,
+                "roi_timeseries_shape": roi_timeseries.shape,
+                "has_nan": bool(np.any(np.isnan(roi_timeseries))),
+                "has_inf": bool(np.any(np.isinf(roi_timeseries)))
+            }
         }
         
     except Exception as e:
+        print(f"❌ {subject_id or 'Unknown'}: Unexpected error")
+        print(f"   Error: {str(e)}")
+        print(f"   Type: {type(e).__name__}")
+        
+        import traceback
+        traceback.print_exc()
+        
         return {
             "status": "failed",
             "subject_id": subject_id if 'subject_id' in locals() else "unknown",
             "site": site if 'site' in locals() else "unknown",
-            "error": str(e),
-            "error_type": "processing_error"
+            "error": f"Unexpected error: {str(e)}",
+            "error_type": "unexpected_error",
+            "error_details": {
+                "exception_type": type(e).__name__,
+                "traceback": traceback.format_exc(),
+                "detailed_error": str(e)
+            }
         }
 
 

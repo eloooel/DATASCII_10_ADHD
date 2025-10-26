@@ -328,6 +328,8 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         if other_fails:
             print(f"    - Other errors: {other_fails}")
         
+        print_detailed_error_summary(all_results)
+        
         return all_results
         
     except Exception as e:
@@ -488,6 +490,56 @@ def run_training(feature_manifest: Path, demographics: Path,
     print(f"\nResults saved to {results_path}")
     
     return final_results
+
+# Add this after feature extraction completes
+def print_detailed_error_summary(all_results):
+    """Print detailed breakdown of feature extraction errors"""
+    
+    # Categorize results
+    success_results = [r for r in all_results if r["status"] == "success"]
+    failed_results = [r for r in all_results if r["status"] == "failed"]
+    
+    print(f"\n{'='*60}")
+    print("FEATURE EXTRACTION DETAILED SUMMARY")
+    print(f"{'='*60}")
+    
+    print(f"✅ Success: {len(success_results)} subjects")
+    print(f"❌ Failed: {len(failed_results)} subjects")
+    
+    if failed_results:
+        # Group by error type
+        error_types = {}
+        for result in failed_results:
+            error_type = result.get("error_type", "unknown")
+            if error_type not in error_types:
+                error_types[error_type] = []
+            error_types[error_type].append(result)
+        
+        print(f"\n📊 Error Breakdown by Type:")
+        for error_type, errors in error_types.items():
+            print(f"  {error_type}: {len(errors)} subjects")
+        
+        print(f"\n🔍 Detailed Error Analysis:")
+        
+        for error_type, errors in error_types.items():
+            print(f"\n--- {error_type.upper()} ({len(errors)} subjects) ---")
+            
+            for i, error in enumerate(errors[:5]):  # Show first 5 of each type
+                print(f"  {i+1}. {error['site']}/{error['subject_id']}")
+                print(f"     Error: {error['error']}")
+                
+                if 'error_details' in error and error['error_details']:
+                    for key, value in error['error_details'].items():
+                        if key == 'available_files' and isinstance(value, list):
+                            print(f"     {key}: {', '.join(value[:3])}{'...' if len(value) > 3 else ''}")
+                        elif key != 'traceback':  # Skip long tracebacks in summary
+                            print(f"     {key}: {value}")
+                print()
+            
+            if len(errors) > 5:
+                print(f"     ... and {len(errors) - 5} more subjects with {error_type}")
+            print()
+
 # --- Main execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
