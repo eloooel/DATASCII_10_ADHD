@@ -766,7 +766,7 @@ class PreprocessingPipeline:
                     # Frequency domain analysis
                     fft = np.fft.fft(component_ts)
                     freqs = np.fft.fftfreq(len(component_ts))
-                    power_spectrum = np.abs(fft) ** 2
+                    power_spectrum = np.abs(fft) ** 2;
                     
                     # Check if most power is in high frequencies (>0.2 Hz for typical rs-fMRI)
                     high_freq_mask = np.abs(freqs) > params.get('high_freq_threshold', 0.2)
@@ -1032,31 +1032,23 @@ def _process_subject(row):
 
         if result["status"] == "success":
             # Get processed data
-            proc_data = result["processed_data"]
+            proc_data = result["processed_data"] 
+            
+            # ✅ FIX: Define original_affine here
+            original_img = nib.load(str(func_path.absolute()))
+            original_affine = original_img.affine
             
             # Ensure it's a NIfTI image
             if torch.is_tensor(proc_data):
                 proc_array = proc_data.cpu().numpy()
-                
-                # Get the original affine from the result or pipeline
-                if hasattr(result, 'metadata') and 'affine' in result['metadata']:
-                    affine = result['metadata']['affine']
-                elif hasattr(pipeline, 'metadata') and 'affine' in pipeline.metadata:
-                    affine = pipeline.metadata['affine']
-                else:
-                    # Load original to get affine
-                    original_img = nib.load(str(func_path.absolute()))
-                    affine = original_img.affine
-
-                proc_nifti = nib.Nifti1Image(proc_array, affine)
+                proc_nifti = nib.Nifti1Image(proc_array, original_affine)
             elif isinstance(proc_data, nib.Nifti1Image):
                 proc_nifti = proc_data
             else:
-                original_img = nib.load(str(func_path.absolute()))
-                affine = original_img.affine
-                proc_nifti = nib.Nifti1Image(np.array(proc_data), affine)
-                
+                proc_nifti = nib.Nifti1Image(np.array(proc_data), original_affine)
+
             # Save functional file
+            print(f"   Saving functional file: {func_output_path.name}")
             nib.save(proc_nifti, func_output_path)
 
             # ✅ VERIFY FUNCTIONAL FILE
@@ -1065,7 +1057,7 @@ def _process_subject(row):
                     func_output_path.unlink()
                 raise RuntimeError(f"Functional file verification failed: {func_output_path}")
 
-            # Save brain mask with enhanced validation
+            # ✅ FIX: Enhanced mask creation/saving with proper affine
             print(f"   Creating brain mask for {subject_id}")
             try:
                 brain_mask = result["brain_mask"]
@@ -1084,31 +1076,30 @@ def _process_subject(row):
                 if mask_coverage < 0.01:  # Less than 1% coverage
                     raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
                 
-                # Create mask NIfTI with proper data type
+                # ✅ FIX: Create mask NIfTI with proper data type and affine
                 mask_nifti = nib.Nifti1Image(
                     brain_mask.astype(np.uint8),  # Ensure uint8
-                    original_affine  # Use original affine
+                    original_affine  # ✅ Now properly defined above
                 )
                 
                 print(f"   Saving mask file: {mask_output_path.name}")
                 nib.save(mask_nifti, mask_output_path)
                 
-                # ✅ VERIFY MASK FILE with lower threshold for debugging
-                if not verify_output_integrity(mask_output_path, min_size_mb=0.1):  # Lower threshold temporarily
+                # ✅ VERIFY MASK FILE
+                if not verify_output_integrity(mask_output_path, min_size_mb=0.1):  # Lowered threshold
                     if mask_output_path.exists():
                         actual_size = mask_output_path.stat().st_size / (1024*1024)
                         print(f"   Actual saved mask size: {actual_size:.2f}MB")
                         mask_output_path.unlink()
                     raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
-            
+                
             except Exception as e:
                 print(f"   ❌ Mask creation/saving failed: {str(e)}")
                 raise RuntimeError(f"Brain mask generation failed: {str(e)}")
 
             # Save confounds
-            pd.DataFrame(result["confound_regressors"]).to_csv(
-                subj_out / "confounds.csv", index=False
-            )
+            confounds_path = subj_out / "confounds.csv"
+            pd.DataFrame(result["confound_regressors"]).to_csv(confounds_path, index=False)
 
             return {
                 "status": "success",
@@ -1127,7 +1118,7 @@ def _process_subject(row):
         return {
             "status": "failed",
             "subject_id": row.get("subject_id", "unknown"),
-            "site": row.get("site", "UnknownSite"),
+            "site": row.get("site", "UnknownSite"), 
             "error": str(e),
             "error_type": "preprocessing_with_verification",
             "message": f"Failed: {str(e)}"
