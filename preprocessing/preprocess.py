@@ -350,7 +350,7 @@ class PreprocessingPipeline:
             ref_time = slice_times[ref_slice_idx]
 
         # Apply slice timing correction
-        corrected_data = np.zeros_like img_data)
+        corrected_data = np.zeros_like(img_data)
         n_timepoints = img_data.shape[-1]
         
         # Create time vectors for interpolation
@@ -766,7 +766,7 @@ class PreprocessingPipeline:
                     # Frequency domain analysis
                     fft = np.fft.fft(component_ts)
                     freqs = np.fft.fftfreq(len(component_ts))
-                    power_spectrum = np.abs(fft) ** 2;
+                    power_spectrum = np.abs(fft) ** 2
                     
                     # Check if most power is in high frequencies (>0.2 Hz for typical rs-fMRI)
                     high_freq_mask = np.abs(freqs) > params.get('high_freq_threshold', 0.2)
@@ -1167,6 +1167,17 @@ def _process_subject(row):
 
                 if not save_successful:
                     raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
+
+                # ✅ FINAL VERIFICATION WITH ORIGINAL THRESHOLD
+                if not verify_output_integrity(mask_output_path, min_size_mb=0.05):
+                    actual_size = mask_output_path.stat().st_size / (1024*1024)
+                    print(f"   ❌ Final verification failed - actual size: {actual_size:.2f}MB")
+                    
+                    if mask_output_path.exists():
+                        mask_output_path.unlink()
+                    raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
+
+                print(f"   ✅ Mask successfully saved and verified!")
 
             except Exception as e:
                 print(f"   ❌ Mask creation/saving failed: {str(e)}")
