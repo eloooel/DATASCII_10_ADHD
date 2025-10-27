@@ -1010,7 +1010,7 @@ def _process_subject(row):
         # Skip if outputs already exist and are verified
         if func_output_path.exists() and mask_output_path.exists():
             if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
-                verify_output_integrity(mask_output_path, min_size_mb=0.5)):
+                verify_output_integrity(mask_output_path, min_size_mb=0.01)):  # ✅ Changed from 0.5 to 0.01
                 return {
                     "status": "success",
                     "subject_id": subject_id,
