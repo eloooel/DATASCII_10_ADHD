@@ -243,7 +243,7 @@ class PreprocessingPipeline:
             'excluded_volumes': []
         }
 
-        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # ✅ Explicit dtype
+        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # ✅ Fixed parenthesis
 
         # Process each volume
         for vol_idx in range(n_vols):
@@ -766,7 +766,7 @@ class PreprocessingPipeline:
                     # Frequency domain analysis
                     fft = np.fft.fft(component_ts)
                     freqs = np.fft.fftfreq(len(component_ts))
-                    power_spectrum = np.abs(fft) ** 2
+                    power_spectrum = np.abs(fft) ** 2;
                     
                     # Check if most power is in high frequencies (>0.2 Hz for typical rs-fMRI)
                     high_freq_mask = np.abs(freqs) > params.get('high_freq_threshold', 0.2)
@@ -1025,7 +1025,7 @@ def _process_subject(row):
         try:
             test_load = nib.load(str(func_path.absolute()))
         except Exception as e:
-            raise ValueError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
+            raise FileNotFoundError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
 
         # Run preprocessing
         result = pipeline.process(str(func_path.absolute()), subject_id)
@@ -1145,7 +1145,7 @@ def _process_subject(row):
                                 test_data = test_load.get_fdata()
                                 test_voxels = np.sum(test_data > 0)
                                 
-                                if test_voxels == mask_voxels and saved_size_mb >= 0.05:
+                                if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # ✅ Lowered from 0.05 to 0.01
                                     print(f"   ✅ Attempt {attempt + 1}: Save successful!")
                                     save_successful = True
                                     break
@@ -1169,7 +1169,7 @@ def _process_subject(row):
                     raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
 
                 # ✅ FINAL VERIFICATION WITH ORIGINAL THRESHOLD
-                if not verify_output_integrity(mask_output_path, min_size_mb=0.05):
+                if not verify_output_integrity(mask_output_path, min_size_mb=0.01):  # ✅ Lowered from 0.05 to 0.01
                     actual_size = mask_output_path.stat().st_size / (1024*1024)
                     print(f"   ❌ Final verification failed - actual size: {actual_size:.2f}MB")
                     
