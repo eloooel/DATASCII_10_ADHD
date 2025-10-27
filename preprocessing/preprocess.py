@@ -1007,16 +1007,15 @@ def _process_subject(row):
         func_output_path = subj_out / "func_preproc.nii.gz"
         mask_output_path = subj_out / "mask.nii.gz"
 
-        # Skip if outputs already exist and are verified
         if func_output_path.exists() and mask_output_path.exists():
             if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
-                verify_output_integrity(mask_output_path, min_size_mb=0.01)):  # ✅ Changed from 0.5 to 0.01
+                verify_output_integrity(mask_output_path, min_size_mb=0.02)): 
                 return {
                     "status": "success",
                     "subject_id": subject_id,
                     "site": site_name,
                     "output_dir": str(subj_out),
-                    "files_verified": True,
+                    "files_verified": True, 
                     "skipped": True,
                     "message": f"Already processed and verified: {subject_id}"
                 }
