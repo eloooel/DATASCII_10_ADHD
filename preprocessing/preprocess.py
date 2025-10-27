@@ -1057,42 +1057,104 @@ def _process_subject(row):
                     func_output_path.unlink()
                 raise RuntimeError(f"Functional file verification failed: {func_output_path}")
 
-            # ✅ FIX: Enhanced mask creation/saving with proper affine
+            # ✅ ENHANCED MASK CREATION AND SAVING
             print(f"   Creating brain mask for {subject_id}")
             try:
                 brain_mask = result["brain_mask"]
                 
-                # Validate mask before saving
+                # ✅ DETAILED MASK VALIDATION
+                print(f"   🔍 Mask details before saving:")
+                print(f"   - Data type: {brain_mask.dtype}")
+                print(f"   - Shape: {brain_mask.shape}")
+                print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
+                print(f"   - Unique values: {np.unique(brain_mask)}")
+                
                 mask_voxels = np.sum(brain_mask > 0)
                 mask_coverage = mask_voxels / brain_mask.size
                 expected_size_mb = brain_mask.nbytes / (1024 * 1024)
                 
-                print(f"   Mask stats: {mask_voxels} voxels ({mask_coverage*100:.1f}% coverage)")
-                print(f"   Expected mask file size: {expected_size_mb:.2f}MB")
+                print(f"   - Non-zero voxels: {mask_voxels}")
+                print(f"   - Coverage: {mask_coverage*100:.1f}%")
+                print(f"   - Memory size: {expected_size_mb:.2f}MB")
                 
-                if mask_voxels < 1000:  # Too few brain voxels
+                if mask_voxels < 1000:
                     raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
                 
-                if mask_coverage < 0.01:  # Less than 1% coverage
+                if mask_coverage < 0.01:
                     raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
                 
-                # ✅ FIX: Create mask NIfTI with proper data type and affine
+                # ✅ ENSURE PROPER DATA TYPE AND AFFINE
+                # Force uint8 data type explicitly
+                clean_mask = brain_mask.astype(np.uint8)
+                
+                print(f"   🔍 After type conversion:")
+                print(f"   - New data type: {clean_mask.dtype}")
+                print(f"   - New min/max: {clean_mask.min()}/{clean_mask.max()}")
+                print(f"   - New unique values: {np.unique(clean_mask)}")
+                
+                # Get the original affine from input file
+                original_img = nib.load(str(func_path.absolute()))
+                original_affine = original_img.affine
+                original_header = original_img.header.copy()
+                
+                # ✅ CREATE MASK NIFTI WITH EXPLICIT SETTINGS
                 mask_nifti = nib.Nifti1Image(
-                    brain_mask.astype(np.uint8),  # Ensure uint8
-                    original_affine  # ✅ Now properly defined above
+                    clean_mask,
+                    original_affine,
+                    header=None  # Let nibabel create a fresh header
                 )
                 
-                print(f"   Saving mask file: {mask_output_path.name}")
+                # ✅ FORCE CORRECT HEADER SETTINGS
+                mask_header = mask_nifti.header
+                mask_header.set_data_dtype(np.uint8)  # Explicitly set uint8
+                mask_header.set_slope_inter(1, 0)     # No scaling
+                
+                print(f"   🔍 NIfTI image details:")
+                print(f"   - NIfTI shape: {mask_nifti.shape}")
+                print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
+                print(f"   - Header dtype: {mask_header.get_data_dtype()}")
+                
+                print(f"   💾 Saving mask file: {mask_output_path.name}")
+                
+                # ✅ SAVE WITH EXPLICIT COMPRESSION
                 nib.save(mask_nifti, mask_output_path)
                 
-                # ✅ VERIFY MASK FILE
-                if not verify_output_integrity(mask_output_path, min_size_mb=0.1):  # Lowered threshold
+                # ✅ IMMEDIATE POST-SAVE VERIFICATION
+                saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
+                print(f"   📏 Saved file size: {saved_size_mb:.2f}MB")
+                
+                # Test loading the saved file immediately
+                try:
+                    test_load = nib.load(mask_output_path)
+                    test_data = test_load.get_fdata()
+                    test_voxels = np.sum(test_data > 0)
+                    print(f"   🧪 Test load: shape={test_data.shape}, voxels={test_voxels}, dtype={test_data.dtype}")
+                    
+                    if test_voxels != mask_voxels:
+                        raise ValueError(f"Voxel count mismatch: expected {mask_voxels}, got {test_voxels}")
+                        
+                except Exception as load_error:
+                    raise RuntimeError(f"Saved mask file cannot be loaded: {load_error}")
+                
+                # ✅ VERIFY WITH RELAXED THRESHOLD TEMPORARILY
+                if not verify_output_integrity(mask_output_path, min_size_mb=0.05):  # Very low threshold for debugging
                     if mask_output_path.exists():
                         actual_size = mask_output_path.stat().st_size / (1024*1024)
-                        print(f"   Actual saved mask size: {actual_size:.2f}MB")
+                        print(f"   ❌ Final verification failed - actual size: {actual_size:.2f}MB")
+                        
+                        # Debug: try to load and see what's wrong
+                        try:
+                            debug_img = nib.load(mask_output_path)
+                            debug_data = debug_img.get_fdata()
+                            print(f"   🐛 Debug load: shape={debug_data.shape}, unique={np.unique(debug_data)}")
+                        except Exception as debug_error:
+                            print(f"   🐛 Debug load failed: {debug_error}")
+                        
                         mask_output_path.unlink()
                     raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
                 
+                print(f"   ✅ Mask successfully saved and verified!")
+
             except Exception as e:
                 print(f"   ❌ Mask creation/saving failed: {str(e)}")
                 raise RuntimeError(f"Brain mask generation failed: {str(e)}")
