@@ -350,7 +350,7 @@ class PreprocessingPipeline:
             ref_time = slice_times[ref_slice_idx]
 
         # Apply slice timing correction
-        corrected_data = np.zeros_like(img_data)
+        corrected_data = np.zeros_like img_data)
         n_timepoints = img_data.shape[-1]
         
         # Create time vectors for interpolation
@@ -1116,44 +1116,57 @@ def _process_subject(row):
                 
                 print(f"   💾 Saving mask file: {mask_output_path.name}")
                 
-                # ✅ SAVE WITH EXPLICIT COMPRESSION
-                nib.save(mask_nifti, mask_output_path)
-                
-                # ✅ IMMEDIATE POST-SAVE VERIFICATION
-                saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
-                print(f"   📏 Saved file size: {saved_size_mb:.2f}MB")
-                
-                # Test loading the saved file immediately
-                try:
-                    test_load = nib.load(mask_output_path)
-                    test_data = test_load.get_fdata()
-                    test_voxels = np.sum(test_data > 0)
-                    print(f"   🧪 Test load: shape={test_data.shape}, voxels={test_voxels}, dtype={test_data.dtype}")
+                # ✅ ROBUST SAVING WITH RETRY MECHANISM
+                max_save_attempts = 3
+                save_successful = False
+
+                for attempt in range(max_save_attempts):
+                    try:
+                        # ✅ SAVE WITH EXPLICIT COMPRESSION AND FLUSH
+                        nib.save(mask_nifti, mask_output_path)
+                        
+                        # ✅ FORCE FILE SYSTEM SYNC
+                        import os
+                        if hasattr(os, 'sync'):
+                            os.sync()  # Unix/Linux
+                        
+                        # Wait briefly for file system to settle
+                        import time
+                        time.sleep(0.1)
+                        
+                        # ✅ IMMEDIATE VERIFICATION
+                        if mask_output_path.exists():
+                            saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
+                            print(f"   📏 Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
+                            
+                            # Test if file is complete by loading it
+                            try:
+                                test_load = nib.load(mask_output_path)
+                                test_data = test_load.get_fdata()
+                                test_voxels = np.sum(test_data > 0)
+                                
+                                if test_voxels == mask_voxels and saved_size_mb >= 0.05:
+                                    print(f"   ✅ Attempt {attempt + 1}: Save successful!")
+                                    save_successful = True
+                                    break
+                                else:
+                                    print(f"   ⚠️ Attempt {attempt + 1}: Verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
+                                    if mask_output_path.exists():
+                                        mask_output_path.unlink()  # Delete failed file
+                            except Exception as load_error:
+                                print(f"   ❌ Attempt {attempt + 1}: Cannot load saved file: {load_error}")
+                                if mask_output_path.exists():
+                                    mask_output_path.unlink()  # Delete corrupted file
+                        else:
+                            print(f"   ❌ Attempt {attempt + 1}: File was not created")
                     
-                    if test_voxels != mask_voxels:
-                        raise ValueError(f"Voxel count mismatch: expected {mask_voxels}, got {test_voxels}")
-                        
-                except Exception as load_error:
-                    raise RuntimeError(f"Saved mask file cannot be loaded: {load_error}")
-                
-                # ✅ VERIFY WITH RELAXED THRESHOLD TEMPORARILY
-                if not verify_output_integrity(mask_output_path, min_size_mb=0.05):  # Very low threshold for debugging
-                    if mask_output_path.exists():
-                        actual_size = mask_output_path.stat().st_size / (1024*1024)
-                        print(f"   ❌ Final verification failed - actual size: {actual_size:.2f}MB")
-                        
-                        # Debug: try to load and see what's wrong
-                        try:
-                            debug_img = nib.load(mask_output_path)
-                            debug_data = debug_img.get_fdata()
-                            print(f"   🐛 Debug load: shape={debug_data.shape}, unique={np.unique(debug_data)}")
-                        except Exception as debug_error:
-                            print(f"   🐛 Debug load failed: {debug_error}")
-                        
-                        mask_output_path.unlink()
-                    raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
-                
-                print(f"   ✅ Mask successfully saved and verified!")
+                    except Exception as save_error:
+                        print(f"   ❌ Attempt {attempt + 1}: Save error: {save_error}")
+                        if mask_output_path.exists():
+                            mask_output_path.unlink()  # Clean up partial file
+
+                if not save_successful:
+                    raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
 
             except Exception as e:
                 print(f"   ❌ Mask creation/saving failed: {str(e)}")
