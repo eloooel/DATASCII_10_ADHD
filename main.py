@@ -524,7 +524,8 @@ def print_detailed_error_summary(all_results):
         for error_type, errors in error_types.items():
             print(f"\n--- {error_type.upper()} ({len(errors)} subjects) ---")
             
-            for i, error in enumerate(errors[:5]):  # Show first 5 of each type
+            # ✅ REMOVE TRUNCATION - show ALL subjects
+            for i, error in enumerate(errors):  # Remove [:5] slice
                 print(f"  {i+1}. {error['site']}/{error['subject_id']}")
                 print(f"     Error: {error['error']}")
                 
@@ -532,13 +533,10 @@ def print_detailed_error_summary(all_results):
                     for key, value in error['error_details'].items():
                         if key == 'available_files' and isinstance(value, list):
                             print(f"     {key}: {', '.join(value[:3])}{'...' if len(value) > 3 else ''}")
-                        elif key != 'traceback':  # Skip long tracebacks in summary
+                        elif key != 'traceback':
                             print(f"     {key}: {value}")
                 print()
             
-            if len(errors) > 5:
-                print(f"     ... and {len(errors) - 5} more subjects with {error_type}")
-            print()
 
 # --- Main execution ---
 if __name__ == "__main__":
