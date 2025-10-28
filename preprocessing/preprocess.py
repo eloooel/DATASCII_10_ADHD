@@ -11,6 +11,8 @@ from scipy.stats import pearsonr
 from sklearn.decomposition import PCA, FastICA
 import pandas as pd
 import gzip
+import psutil
+import gc
 
 from nilearn.datasets import load_mni152_template
 from utils import run_parallel
@@ -984,8 +986,25 @@ def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose
         return False
 
 def _process_subject(row):
-    """Process a single subject with output verification"""
+    import psutil
+    import gc
+    
     try:
+        # Check available memory before processing
+        memory = psutil.virtual_memory()
+        if memory.percent > 85:
+            print(f"⚠️ High memory usage ({memory.percent:.1f}%) - forcing cleanup")
+            gc.collect()
+            
+            # Wait for memory to settle
+            import time
+            time.sleep(2)
+            
+            # Check again
+            memory = psutil.virtual_memory()
+            if memory.percent > 90:
+                raise RuntimeError(f"Insufficient memory ({memory.percent:.1f}% used). Cannot safely process.")
+        
         # Get device from row if available
         device = row.get('device', None)
         if device and isinstance(device, str):

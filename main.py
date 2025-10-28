@@ -65,7 +65,7 @@ MODEL_CONFIG = {
 }
 
 TRAINING_CONFIG = {
-    'batch_size': 4,
+    'batch_size': 1,
     'learning_rate': 1e-3,
     'optimizer': 'adam',
     'weight_decay': 1e-5,
@@ -83,7 +83,7 @@ TRAINING_CONFIG = {
     # Memory optimization settings
     'use_amp': True,
     'use_gradient_checkpointing': True,
-    'gradient_accumulation_steps': 4
+    'gradient_accumulation_steps': 8
 }
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
