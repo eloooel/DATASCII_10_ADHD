@@ -903,70 +903,84 @@ class PreprocessingPipeline:
         }
 
 
-def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0) -> bool:
-    """
-    Verify that a NIfTI file was written correctly and is not corrupted
-    
-    Args:
-        output_path: Path to the .nii.gz file to verify
-        min_size_mb: Minimum expected file size in MB
-    
-    Returns:
-        True if file is valid, False if corrupted
-    """
+def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose: bool = True) -> bool:
+    """Verify that a NIfTI file was written correctly and is not corrupted"""
     if not output_path.exists():
-        print(f"❌ Verification failed: File does not exist: {output_path}")
+        if verbose:
+            print(f"❌ Verification failed: File does not exist: {output_path}")
         return False
     
     try:
         # Check file size
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
+        if verbose:
+            print(f"   📏 Checking {output_path.name}: {file_size_mb:.2f}MB")
+            
         if file_size_mb < min_size_mb:
-            print(f"❌ Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
+            if verbose:
+                print(f"❌ Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
             return False
         
         # Test gzip integrity
         if output_path.suffix == '.gz':
             try:
+                if verbose:
+                    print(f"   🔍 Testing gzip integrity: {output_path.name}")
                 with gzip.open(output_path, 'rb') as f:
-                    # Read first 1MB to test decompression
                     chunk = f.read(1024 * 1024)
                     if len(chunk) == 0:
-                        print(f"❌ Verification failed: Gzip file appears empty: {output_path}")
+                        if verbose:
+                            print(f"❌ Verification failed: Gzip file appears empty: {output_path}")
                         return False
+                if verbose:
+                    print(f"   ✅ Gzip integrity: PASSED")
             except Exception as gz_error:
-                print(f"❌ Verification failed: Gzip corruption in {output_path}: {gz_error}")
+                if verbose:
+                    print(f"❌ Verification failed: Gzip corruption in {output_path}: {gz_error}")
                 return False
         
         # Test NIfTI loading
         try:
+            if verbose:
+                print(f"   🔍 Testing NIfTI loading: {output_path.name}")
             import nibabel as nib
             img = nib.load(output_path)
             
             # Basic shape validation
             if len(img.shape) < 3:
-                print(f"❌ Verification failed: Invalid dimensions {img.shape}: {output_path}")
+                if verbose:
+                    print(f"❌ Verification failed: Invalid dimensions {img.shape}: {output_path}")
                 return False
+            
+            if verbose:
+                print(f"   ✅ NIfTI shape: {img.shape}")
             
             # Test reading a small sample of data
             if len(img.shape) == 4:
-                test_data = img.get_fdata()[:5, :5, :5, :1]  # Small 4D sample
+                test_data = img.get_fdata()[:5, :5, :5, :1]
             else:
-                test_data = img.get_fdata()[:5, :5, :5]  # Small 3D sample
+                test_data = img.get_fdata()[:5, :5, :5]
             
             if test_data is None or test_data.size == 0:
-                print(f"❌ Verification failed: Cannot read NIfTI data: {output_path}")
+                if verbose:
+                    print(f"❌ Verification failed: Cannot read NIfTI data: {output_path}")
                 return False
+            
+            if verbose:
+                print(f"   ✅ Data sample read successfully")
                 
         except Exception as nii_error:
-            print(f"❌ Verification failed: NIfTI loading error in {output_path}: {nii_error}")
+            if verbose:
+                print(f"❌ Verification failed: NIfTI loading error in {output_path}: {nii_error}")
             return False
         
-        print(f"✅ Verification passed: {output_path.name} ({file_size_mb:.1f}MB)")
+        if verbose:
+            print(f"✅ Verification passed: {output_path.name} ({file_size_mb:.1f}MB)")
         return True
         
     except Exception as e:
-        print(f"❌ Verification failed: Unexpected error in {output_path}: {e}")
+        if verbose:
+            print(f"❌ Verification failed: Unexpected error in {output_path}: {e}")
         return False
 
 def _process_subject(row):
@@ -1208,6 +1222,24 @@ def _process_subject(row):
             "error_type": "preprocessing_with_verification",
             "message": f"Failed: {str(e)}"
         }
+
+def atomic_nifti_save(img, final_path):
+    """Save NIfTI atomically to prevent corruption"""
+    temp_path = final_path.with_suffix('.tmp')
+    try:
+        # Save to temporary file first
+        nib.save(img, temp_path)
+        
+        # Verify temporary file
+        test_img = nib.load(temp_path)
+        
+        # Atomic move to final location
+        temp_path.rename(final_path)
+        return True
+    except Exception as e:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise e
 
 
 
