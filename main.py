@@ -143,6 +143,7 @@ def run_preprocessing(metadata_out: Path, preproc_out: Path, parallel: bool = Tr
                     
                 else:
                     # SEQUENTIAL MODE: Show individual subject details
+                    results = []
                     for _, row in batch.iterrows():
                         site = row.get("site", row.get("dataset", "UnknownSite"))
                         subject_id = row.get("subject_id", "unknown")
@@ -493,11 +494,16 @@ def run_training(feature_manifest: Path, demographics: Path,
 
 # Add this after feature extraction completes
 def print_detailed_error_summary(all_results):
-    """Print detailed breakdown of feature extraction errors"""
+    """Print detailed breakdown of feature extraction errors - ONLY if there are failures"""
     
     # Categorize results
     success_results = [r for r in all_results if r["status"] == "success"]
     failed_results = [r for r in all_results if r["status"] == "failed"]
+    
+    # ✅ ONLY PRINT IF THERE ARE FAILURES
+    if not failed_results:
+        print(f"\n✅ All {len(success_results)} subjects processed successfully!")
+        return
     
     print(f"\n{'='*60}")
     print("FEATURE EXTRACTION DETAILED SUMMARY")
@@ -506,36 +512,35 @@ def print_detailed_error_summary(all_results):
     print(f"✅ Success: {len(success_results)} subjects")
     print(f"❌ Failed: {len(failed_results)} subjects")
     
-    if failed_results:
-        # Group by error type
-        error_types = {}
-        for result in failed_results:
-            error_type = result.get("error_type", "unknown")
-            if error_type not in error_types:
-                error_types[error_type] = []
-            error_types[error_type].append(result)
+    # Group by error type
+    error_types = {}
+    for result in failed_results:
+        error_type = result.get("error_type", "unknown")
+        if error_type not in error_types:
+            error_types[error_type] = []
+        error_types[error_type].append(result)
+    
+    print(f"\n📊 Error Breakdown by Type:")
+    for error_type, errors in error_types.items():
+        print(f"  {error_type}: {len(errors)} subjects")
+    
+    print(f"\n🔍 Detailed Error Analysis:")
+    
+    for error_type, errors in error_types.items():
+        print(f"\n--- {error_type.upper()} ({len(errors)} subjects) ---")
         
-        print(f"\n📊 Error Breakdown by Type:")
-        for error_type, errors in error_types.items():
-            print(f"  {error_type}: {len(errors)} subjects")
-        
-        print(f"\n🔍 Detailed Error Analysis:")
-        
-        for error_type, errors in error_types.items():
-            print(f"\n--- {error_type.upper()} ({len(errors)} subjects) ---")
+        # Show ALL subjects (no truncation)
+        for i, error in enumerate(errors):
+            print(f"  {i+1}. {error['site']}/{error['subject_id']}")
+            print(f"     Error: {error['error']}")
             
-            # ✅ REMOVE TRUNCATION - show ALL subjects
-            for i, error in enumerate(errors):  # Remove [:5] slice
-                print(f"  {i+1}. {error['site']}/{error['subject_id']}")
-                print(f"     Error: {error['error']}")
-                
-                if 'error_details' in error and error['error_details']:
-                    for key, value in error['error_details'].items():
-                        if key == 'available_files' and isinstance(value, list):
-                            print(f"     {key}: {', '.join(value[:3])}{'...' if len(value) > 3 else ''}")
-                        elif key != 'traceback':
-                            print(f"     {key}: {value}")
-                print()
+            if 'error_details' in error and error['error_details']:
+                for key, value in error['error_details'].items():
+                    if key == 'available_files' and isinstance(value, list):
+                        print(f"     {key}: {', '.join(value[:3])}{'...' if len(value) > 3 else ''}")
+                    elif key != 'traceback':
+                        print(f"     {key}: {value}")
+            print()
             
 
 # --- Main execution ---
