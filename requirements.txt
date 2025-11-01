@@ -1,20 +1,20 @@
-# PyTorch core and related packages with CUDA 12.1
-torch==2.1.0+cu121
-torchvision==0.16.0+cu121
-torchaudio==2.1.0+cu121
+# PyTorch core and related packages (install with CUDA 11.8 support)
+# Use: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
 
 # PyTorch Geometric and related packages
-torch-scatter
-torch-sparse
-torch-cluster
-torch-spline-conv
-torch-geometric
+# Install separately with: pip install torch-geometric torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.7.0+cu118.html
+# torch-scatter
+# torch-sparse
+# torch-cluster
+# torch-spline-conv
+# torch-geometric
 
 # Other dependencies
 nibabel==5.1.0
 nilearn==0.10.2
-pyyaml==6.0
-tqdm==4.66.1
 scikit-learn==1.3.1
 
 # Visualization and utilities  
