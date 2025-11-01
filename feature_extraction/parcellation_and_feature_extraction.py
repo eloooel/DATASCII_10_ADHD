@@ -131,9 +131,8 @@ class FeatureExtractor:
 # ----------------- Batch Processing -----------------
 
 def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas_labels: list, parcellation_path: Path = None):
-    """Worker function for feature extraction - with comprehensive file corruption handling"""
+    """Worker function for feature extraction - only print on errors"""
     import gzip
-    import os
     
     subject_id = None
     site = None
@@ -141,8 +140,6 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
     try:
         subject_id = row["subject_id"]
         site = row.get("site", row.get("dataset", "UnknownSite"))
-        
-        print(f"🔄 Processing {site}/{subject_id}")
         
         func_path = preproc_dir / site / subject_id / "func_preproc.nii.gz"
         mask_path = preproc_dir / site / subject_id / "mask.nii.gz"
@@ -259,11 +256,8 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         
         if not func_validation['readable']:
             print(f"❌ {subject_id}: Functional file corrupted")
-            print(f"   File: {func_path}")
-            print(f"   Size: {func_validation['size_mb']:.2f}MB")
             print(f"   Corruption type: {func_validation['corruption_type']}")
-            print(f"   Error: {func_validation['error_message']}")
-            
+            # ... detailed error info ...
             return {
                 "status": "failed",
                 "subject_id": subject_id,
@@ -284,9 +278,7 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         
         if not mask_validation['readable']:
             print(f"❌ {subject_id}: Mask file corrupted")
-            print(f"   File: {mask_path}")
-            print(f"   Corruption type: {mask_validation['corruption_type']}")
-            
+            # ... detailed error info ...
             return {
                 "status": "failed",
                 "subject_id": subject_id,
@@ -425,9 +417,8 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         }
         
     except Exception as e:
-        print(f"❌ {subject_id or 'Unknown'}: Unexpected error")
-        print(f"   Error: {str(e)}")
-        
+        # ✅ ONLY print on failure
+        print(f"❌ {subject_id or 'Unknown'}: Unexpected error - {str(e)}")
         return {
             "status": "failed",
             "subject_id": subject_id if 'subject_id' in locals() else "unknown",
