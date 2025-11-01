@@ -75,32 +75,20 @@ The retry script will:
 5. Save results to `data/preprocessed/retry_results.csv`
 
 **Manual retry for specific subjects:**
-```python
-# In a Python script or notebook
-from pathlib import Path
-import pandas as pd
-from preprocessing.preprocess import _process_subject
-from utils import run_parallel
+```bash
+# Edit retry_specific_subjects.py to add your subject IDs, then run:
+python retry_specific_subjects.py
 
-# Load original manifest
-manifest = pd.read_csv("data/raw/subjects_metadata.csv")
-
-# Filter to specific failed subjects
-failed_ids = ["sub-0027017", "sub-0027016", "sub-3304956"]
-retry_df = manifest[manifest['subject_id'].isin(failed_ids)].copy()
-retry_df['force_retry'] = True
-retry_df['out_dir'] = "data/preprocessed"
-
-# Process with reduced parallelism for memory issues
-results = run_parallel(_process_subject, retry_df.to_dict('records'), n_jobs=2)
-
-# Or process one at a time for problematic subjects
-for subject_id in failed_ids:
-    row = manifest[manifest['subject_id'] == subject_id].iloc[0].to_dict()
-    row['force_retry'] = True
-    row['out_dir'] = "data/preprocessed"
-    result = _process_subject(row)
-    print(f"{subject_id}: {result['status']}")
+# Or use Python directly:
+python -c "
+from retry_specific_subjects import retry_specific_subjects
+results = retry_specific_subjects(
+    subject_ids=['sub-0027016', 'sub-0027017', 'sub-3304956', 'sub-3449233', 'sub-3566449'],
+    manifest_path='data/raw/subjects_metadata.csv',
+    output_dir='data/preprocessed',
+    cleanup=True
+)
+"
 ```
 
 **Common failure causes and solutions:**
