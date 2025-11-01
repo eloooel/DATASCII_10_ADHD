@@ -985,6 +985,65 @@ def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose
             print(f"❌ Verification failed: Unexpected error in {output_path}: {e}")
         return False
 
+def cleanup_failed_subject(subject_out_dir: Path):
+    """Remove all files for a failed subject to enable clean reprocessing"""
+    if subject_out_dir.exists():
+        import shutil
+        try:
+            shutil.rmtree(subject_out_dir)
+            print(f"🧹 Cleaned up failed subject directory: {subject_out_dir}")
+            return True
+        except Exception as e:
+            print(f"⚠️ Failed to cleanup {subject_out_dir}: {e}")
+            return False
+    return True
+
+def identify_failed_subjects(output_base_dir: Path) -> List[Dict[str, str]]:
+    """Identify subjects with failed or corrupted preprocessing"""
+    failed_subjects = []
+    
+    if not output_base_dir.exists():
+        return failed_subjects
+    
+    for site_dir in output_base_dir.iterdir():
+        if not site_dir.is_dir():
+            continue
+            
+        for subject_dir in site_dir.iterdir():
+            if not subject_dir.is_dir():
+                continue
+                
+            func_file = subject_dir / "func_preproc.nii.gz"
+            mask_file = subject_dir / "mask.nii.gz"
+            
+            # Check if files exist and are valid
+            failed = False
+            reason = ""
+            
+            if not func_file.exists():
+                failed = True
+                reason = "Missing functional file"
+            elif not verify_output_integrity(func_file, min_size_mb=10.0, verbose=False):
+                failed = True
+                reason = "Corrupted functional file"
+            
+            if not mask_file.exists():
+                failed = True
+                reason = "Missing mask file"
+            elif not verify_output_integrity(mask_file, min_size_mb=0.01, verbose=False):
+                failed = True
+                reason = "Corrupted mask file"
+            
+            if failed:
+                failed_subjects.append({
+                    "subject_id": subject_dir.name,
+                    "site": site_dir.name,
+                    "output_dir": str(subject_dir),
+                    "reason": reason
+                })
+    
+    return failed_subjects
+
 def _process_subject(row):
     import psutil
     import gc
@@ -1004,6 +1063,9 @@ def _process_subject(row):
             memory = psutil.virtual_memory()
             if memory.percent > 90:
                 raise RuntimeError(f"Insufficient memory ({memory.percent:.1f}% used). Cannot safely process.")
+        
+        # ✅ ADDED: Force retry flag check
+        force_retry = row.get('force_retry', False)
         
         # Get device from row if available
         device = row.get('device', None)
@@ -1040,7 +1102,8 @@ def _process_subject(row):
         func_output_path = subj_out / "func_preproc.nii.gz"
         mask_output_path = subj_out / "mask.nii.gz"
 
-        if func_output_path.exists() and mask_output_path.exists():
+        # ✅ MODIFIED: Skip verification check if force_retry is True
+        if not force_retry and func_output_path.exists() and mask_output_path.exists():
             if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
                 verify_output_integrity(mask_output_path, min_size_mb=0.02)): 
                 return {
@@ -1052,6 +1115,32 @@ def _process_subject(row):
                     "skipped": True,
                     "message": f"Already processed and verified: {subject_id}"
                 }
+        
+        # ✅ ADDED: Clean up corrupted files before retry
+        if force_retry:
+            print(f"🔄 Force retry enabled for {subject_id} - cleaning up old files")
+            if func_output_path.exists():
+                func_output_path.unlink()
+                print(f"   🧹 Removed old functional file")
+            if mask_output_path.exists():
+                mask_output_path.unlink()
+                print(f"   🧹 Removed old mask file")
+            confounds_path = subj_out / "confounds.csv"
+            if confounds_path.exists():
+                confounds_path.unlink()
+                print(f"   🧹 Removed old confounds file")
+
+        # ✅ ADDED: Memory-optimized processing configuration for problematic subjects
+        memory_optimized_config = pipeline.config.copy()
+        if memory.percent > 70:
+            print(f"⚠️ Applying memory-optimized settings ({memory.percent:.1f}% memory used)")
+            # Reduce ICA components for memory-constrained environments
+            if 'denoising' in memory_optimized_config:
+                if 'ica_aroma' in memory_optimized_config['denoising']:
+                    memory_optimized_config['denoising']['ica_aroma']['n_components'] = 15
+                if 'acompcor' in memory_optimized_config['denoising']:
+                    memory_optimized_config['denoising']['acompcor']['n_components'] = 3
+            pipeline.config = memory_optimized_config
 
         # Test NIfTI loading
         try:

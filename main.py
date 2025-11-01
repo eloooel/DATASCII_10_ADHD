@@ -45,7 +45,7 @@ SPLIT_CONFIG = {
 MODEL_CONFIG = {
     'hidden_dim': 128,
     'num_classes': 2,
-    'num_heads': 4,
+    'num_heads': 4, 
     'dropout': 0.3,
     'gnn': {
         'hidden_dims': [128, 64, 32],
@@ -65,7 +65,7 @@ MODEL_CONFIG = {
 }
 
 TRAINING_CONFIG = {
-    'batch_size': 1,
+    'batch_size': 2,
     'learning_rate': 1e-3,
     'optimizer': 'adam',
     'weight_decay': 1e-5,
@@ -73,7 +73,7 @@ TRAINING_CONFIG = {
     'early_stopping_patience': 10,
     'early_stopping_min_delta': 0.001,
     'gradient_clip': 1.0,
-    'num_workers': 0,
+    'num_workers': 2,
     'use_focal_loss': True,
     'focal_alpha': 0.25,
     'focal_gamma': 2.0,
@@ -547,7 +547,7 @@ def print_detailed_error_summary(all_results):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
     parser.add_argument("--stage", type=str,
-                       choices=["preprocessing", "features", "split", "training", "full"],
+                       choices=["preprocessing", "features", "split", "training", "full", "retry"],
                        default="full",
                        help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
@@ -560,6 +560,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--no-cuda", action="store_true",
                        help="Disable CUDA even if available")
+    parser.add_argument("--retry-cleanup", action="store_true", default=True,
+                       help="Cleanup corrupted files before retry (default: True)")
+    parser.add_argument("--no-retry-cleanup", action="store_false", dest="retry_cleanup",
+                       help="Don't cleanup corrupted files before retry")
     args = parser.parse_args()
 
     # Device configuration based on args
@@ -578,6 +582,27 @@ if __name__ == "__main__":
 
     # Run pipeline stages
     try:
+        # Handle retry stage
+        if args.stage == "retry":
+            from preprocessing.retry_failed import retry_failed_preprocessing
+            
+            print("="*70)
+            print("RETRYING FAILED PREPROCESSING")
+            print("="*70)
+            
+            results = retry_failed_preprocessing(
+                manifest_path=str(METADATA_OUT),
+                output_dir=str(PREPROC_OUT),
+                cleanup=args.retry_cleanup,
+                n_jobs=2 if args.parallel else 1
+            )
+            
+            # Save retry results
+            retry_results_path = PREPROC_OUT / "retry_results.csv"
+            results.to_csv(retry_results_path, index=False)
+            print(f"\n💾 Retry results saved to: {retry_results_path}")
+            sys.exit(0)
+        
         # If a feature manifest already exists, treat "full" as skipping preprocessing+feature extraction.
         manifest_exists = FEATURE_MANIFEST.exists()
 
