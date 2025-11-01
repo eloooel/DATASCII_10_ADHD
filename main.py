@@ -11,7 +11,12 @@ from pathlib import Path
 import subprocess
 import torch
 from tqdm import tqdm
-
+import argparse
+import sys
+import json
+import pandas as pd
+import torch
+from pathlib import Path
 import pandas as pd
 import numpy as np
 from preprocessing import PreprocessingPipeline
@@ -329,7 +334,7 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         if other_fails:
             print(f"    - Other errors: {other_fails}")
         
-        print_detailed_error_summary(all_results)
+        print_detailed_error_summary(all_results, "FEATURE EXTRACTION")
         
         return all_results
         
@@ -492,27 +497,22 @@ def run_training(feature_manifest: Path, demographics: Path,
     
     return final_results
 
-# Add this after feature extraction completes
-def print_detailed_error_summary(all_results):
-    """Print detailed breakdown of feature extraction errors - ONLY if there are failures"""
-    
+def print_detailed_error_summary(all_results, stage_name="PROCESSING"):
     # Categorize results
     success_results = [r for r in all_results if r["status"] == "success"]
     failed_results = [r for r in all_results if r["status"] == "failed"]
     
-    # ✅ ONLY PRINT IF THERE ARE FAILURES
     if not failed_results:
-        print(f"\n✅ All {len(success_results)} subjects processed successfully!")
+        print(f"\nAll {len(success_results)} subjects processed successfully!")
         return
     
     print(f"\n{'='*60}")
-    print("FEATURE EXTRACTION DETAILED SUMMARY")
+    print(f"{stage_name} DETAILED SUMMARY")
     print(f"{'='*60}")
     
-    print(f"✅ Success: {len(success_results)} subjects")
-    print(f"❌ Failed: {len(failed_results)} subjects")
+    print(f"Success: {len(success_results)} subjects")
+    print(f"Failed: {len(failed_results)} subjects")
     
-    # Group by error type
     error_types = {}
     for result in failed_results:
         error_type = result.get("error_type", "unknown")
@@ -520,11 +520,9 @@ def print_detailed_error_summary(all_results):
             error_types[error_type] = []
         error_types[error_type].append(result)
     
-    print(f"\n📊 Error Breakdown by Type:")
+    print(f"\nError Breakdown by Type:")
     for error_type, errors in error_types.items():
         print(f"  {error_type}: {len(errors)} subjects")
-    
-    print(f"\n🔍 Detailed Error Analysis:")
     
     for error_type, errors in error_types.items():
         print(f"\n--- {error_type.upper()} ({len(errors)} subjects) ---")
@@ -541,9 +539,9 @@ def print_detailed_error_summary(all_results):
                     elif key != 'traceback':
                         print(f"     {key}: {value}")
             print()
-            
 
-# --- Main execution ---
+
+# main exec
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
     parser.add_argument("--stage", type=str,
@@ -622,7 +620,7 @@ if __name__ == "__main__":
             )
         else:
             print("Skipping feature extraction (feature manifest found). To force, run --stage features or delete the manifest.")
- 
+
         if args.stage in ["split", "training", "full"]:
             splits = run_splitting(FEATURE_MANIFEST, SPLITS_DIR, SPLIT_CONFIG)
 

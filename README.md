@@ -122,22 +122,86 @@ for subject_id in failed_ids:
 
 Instructions for downloading dependencies:
 
-**Recommended installation sequence:**
-   Step 1: Install PyTorch with CUDA support
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-   
-   Step 2: Install PyTorch Geometric and extensions
-   pip install torch-geometric torch-scatter torch-sparse torch-cluster torch-spline-conv -f https://data.pyg.org/whl/torch-2.7.0+cu118.html
-   
-   Step 3: Install remaining dependencies
-   pip install -r requirements.txt
+1. Input in the terminal
 
-**Option 2: Install PyTorch CPU version (if no GPU or CUDA issues)**
-   pip install torch torchvision torchaudio
-   pip install -r requirements.txt
+   # Install core dependencies
 
-**Option 3: If requirements.txt specifies torch version, modify it to use latest compatible version**
-   See "Troubleshooting" section below
+   uv sync
+
+   # Install PyTorch 2.2.0 (compatible with your code)
+
+   uv run pip install torch==2.1.0+cu121 torchvision==0.16.0+cu121 torchaudio==2.1.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+   # Install PyTorch Geometric with pre-compiled wheels
+
+   uv run pip install torch-scatter torch-sparse torch-cluster torch-spline-conv torch-geometric -f https://data.pyg.org/whl/torch-2.1.0+cu121.html
+
+   ***
+
+   ## 🐳 Docker Commands with uv
+
+### Build
+
+```bash
+docker build -t adhd-gnn-stan:latest .
+```
+
+### Run with GPU support
+
+```bash
+docker run --gpus all --rm \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/outputs:/app/outputs \
+    adhd-gnn-stan:latest \
+    uv run python main.py --stage full
+```
+
+### Run CPU-only (memory-optimized)
+
+```bash
+docker run --rm \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/outputs:/app/outputs \
+    --memory=16g \
+    --cpus=8 \
+    --env CUDA_VISIBLE_DEVICES="" \
+    adhd-gnn-stan:latest \
+    uv run python main.py --stage full --no-parallel --no-cuda
+```
+
+### Interactive mode with uv
+
+```bash
+docker run -it --rm \
+    -v $(pwd)/data:/app/data \
+    -v $(pwd)/outputs:/app/outputs \
+    adhd-gnn-stan:latest \
+    /bin/bash
+
+# Inside container, use uv run:
+adhd_user@container:/app$ uv run python main.py --help
+adhd_user@container:/app$ uv run python -c "import torch; print(torch.__version__)"
+```
+
+### Test PyTorch installation
+
+```bash
+docker run --rm adhd-gnn-stan:latest uv run python -c "
+import torch, nibabel, pandas, numpy
+print('✅ All dependencies working')
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
+"
+```
+
+### Run corruption checker
+
+```bash
+docker run --rm -v $(pwd)/data:/app/data adhd-gnn-stan:latest \
+    uv run python check_preprocessing_integrity.py \
+    --preprocessed-dir /app/data/preprocessed \
+    --metadata-csv /app/data/raw/subjects_metadata.csv
+```
 
 For Preprocessing and Feature Extraction:
 Individual Subject-level parallel execution

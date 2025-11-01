@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  adhd-pipeline:
+    build: .
+    image: adhd-gnn-stan:latest
+    container_name: adhd_classifier
+
+    # GPU support (optional)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    environment:
+      - PYTHONPATH=/app
+      - OMP_NUM_THREADS=4
+      - MKL_NUM_THREADS=4
+      - CUDA_VISIBLE_DEVICES=0
+
+    volumes:
+      - ./data:/app/data
+      - ./outputs:/app/outputs
+      - ./atlas:/app/atlas
+      - adhd_models:/app/models_cache
+
+    mem_limit: 16g
+    cpus: 8
+
+    # ✅ All commands now use uv run
+    # command: ["uv", "run", "python", "main.py", "--stage", "preprocessing", "--no-parallel"]
+    # command: ["uv", "run", "python", "main.py", "--stage", "features"]
+    # command: ["uv", "run", "python", "main.py", "--stage", "full", "--no-parallel"]
+    command: ["uv", "run", "python", "main.py", "--help"]
+
+volumes:
+  adhd_models:
+    driver: local

@@ -29,7 +29,9 @@ class DataDiscovery:
             dataset_name = dataset_dir.name
             print(f"Processing dataset: {dataset_name}")
             
+            # ✅ Load participants info FIRST
             participants_info = self._load_participants_info(dataset_dir)
+            print(f"📋 {dataset_name}: Loaded {len(participants_info)} participant diagnoses")
             
             dataset_subjects = []
             subject_dirs = [d for d in dataset_dir.iterdir() 
@@ -38,12 +40,13 @@ class DataDiscovery:
             for subject_dir in subject_dirs:
                 subject_id = subject_dir.name
                 
+                # ✅ Get proper diagnosis using existing logic
+                diagnosis = self._get_diagnosis(subject_id, participants_info)
+                
                 # Get ALL functional files for this subject
                 func_files = self._find_all_functional_files(subject_dir)
                 
                 if func_files:
-                    diagnosis = self._get_diagnosis(subject_id, participants_info)
-                    
                     # Create entry for EACH run
                     for i, func_file in enumerate(func_files):
                         # Extract run number from filename

@@ -857,18 +857,20 @@ class PreprocessingPipeline:
         # Final validation
         mask_size_mb = best_mask.nbytes / (1024 * 1024)
         
+        # ✅ ONLY print details if there's a problem
+        if mask_size_mb < 0.1 or best_coverage < 0.1:
+            print(f"Mask validation issues for {self.subject_id}:")
+            print(f"   - Shape: {best_mask.shape}")
+            print(f"   - Non-zero voxels: {best_mask.sum()}")
+            print(f"   - Coverage: {best_coverage*100:.1f}%")
+            print(f"   - Expected file size: {mask_size_mb:.2f}MB")
+            
+            if mask_size_mb < 0.1:
+                self._log_step("brain_mask", "warning", f"Suspiciously small mask: {mask_size_mb:.2f}MB")
+    
+        # ✅ SUCCESS: Only log to processing log, no console spam
         self._log_step("brain_mask", "success", 
-                      f"Generated mask: {best_mask.sum()} voxels ({best_coverage*100:.1f}% coverage, {mask_size_mb:.2f}MB)")
-        
-        # Print detailed diagnostics
-        print(f"   Mask validation for {self.subject_id}:")
-        print(f"   - Shape: {best_mask.shape}")
-        print(f"   - Non-zero voxels: {best_mask.sum()}")
-        print(f"   - Coverage: {best_coverage*100:.1f}%")
-        print(f"   - Expected file size: {mask_size_mb:.2f}MB")
-        
-        if mask_size_mb < 0.1:
-            print(f"   ⚠️  WARNING: Mask seems too small!")
+                      f"Generated mask: {best_mask.sum()} voxels ({best_coverage*100:.1f}% coverage)")
         
         return best_mask
 
@@ -905,7 +907,7 @@ class PreprocessingPipeline:
         }
 
 
-def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose: bool = True) -> bool:
+def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose: bool = False) -> bool:
     """Verify that a NIfTI file was written correctly and is not corrupted"""
     if not output_path.exists():
         if verbose:
@@ -1047,6 +1049,10 @@ def identify_failed_subjects(output_base_dir: Path) -> List[Dict[str, str]]:
 def _process_subject(row):
     import psutil
     import gc
+    import time
+    
+    # Add a verbose flag for debugging
+    debug_verbose = False  # ✅ Set to True only when debugging
     
     try:
         # Check available memory before processing
@@ -1056,7 +1062,6 @@ def _process_subject(row):
             gc.collect()
             
             # Wait for memory to settle
-            import time
             time.sleep(2)
             
             # Check again
@@ -1075,7 +1080,16 @@ def _process_subject(row):
         pipeline = PreprocessingPipeline(device=device)
         subject_id = row["subject_id"]
         func_path = Path(row["input_path"])
-
+        
+        # ✅ ONLY print validation if verbose or there's an issue
+        corruption_check = validate_input_file(func_path)
+        
+        if not corruption_check['valid']:
+            print(f"❌ {subject_id}: Input validation failed - {corruption_check['message']}")
+            raise FileCorruptionError(f"Input file corrupted: {corruption_check['error_type']}")
+        elif debug_verbose:
+            print(f"🔍 Validating input file: {subject_id}")
+        
         # Extract site name
         site_name = (
             row.get("site") or 
@@ -1173,7 +1187,7 @@ def _process_subject(row):
             nib.save(proc_nifti, func_output_path)
 
             # ✅ VERIFY FUNCTIONAL FILE
-            if not verify_output_integrity(func_output_path, min_size_mb=10.0):
+            if not verify_output_integrity(func_output_path, min_size_mb=10.0, verbose=False):  # ✅ Add verbose=False
                 if func_output_path.exists():
                     func_output_path.unlink()
                 raise RuntimeError(f"Functional file verification failed: {func_output_path}")
@@ -1208,11 +1222,6 @@ def _process_subject(row):
                 # Force uint8 data type explicitly
                 clean_mask = brain_mask.astype(np.uint8)
                 
-                print(f"   🔍 After type conversion:")
-                print(f"   - New data type: {clean_mask.dtype}")
-                print(f"   - New min/max: {clean_mask.min()}/{clean_mask.max()}")
-                print(f"   - New unique values: {np.unique(clean_mask)}")
-                
                 # Get the original affine from input file
                 original_img = nib.load(str(func_path.absolute()))
                 original_affine = original_img.affine
@@ -1230,14 +1239,14 @@ def _process_subject(row):
                 mask_header.set_data_dtype(np.uint8)  # Explicitly set uint8
                 mask_header.set_slope_inter(1, 0)     # No scaling
                 
-                print(f"   🔍 NIfTI image details:")
-                print(f"   - NIfTI shape: {mask_nifti.shape}")
-                print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
-                print(f"   - Header dtype: {mask_header.get_data_dtype()}")
+                # ✅ ONLY print details if verbose
+                if debug_verbose:
+                    print(f"   🔍 NIfTI image details:")
+                    print(f"   - NIfTI shape: {mask_nifti.shape}")
+                    print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
+                    print(f"   - Header dtype: {mask_header.get_data_dtype()}")
                 
-                print(f"   💾 Saving mask file: {mask_output_path.name}")
-                
-                # ✅ ROBUST SAVING WITH RETRY MECHANISM
+                # ✅ ROBUST SAVING - ONLY PRINT ERRORS OR IF VERBOSE
                 max_save_attempts = 3
                 save_successful = False
 
@@ -1252,13 +1261,15 @@ def _process_subject(row):
                             os.sync()  # Unix/Linux
                         
                         # Wait briefly for file system to settle
-                        import time
                         time.sleep(0.1)
                         
                         # ✅ IMMEDIATE VERIFICATION
                         if mask_output_path.exists():
                             saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
-                            print(f"   📏 Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
+                            
+                            # ✅ ONLY print attempt details if verbose
+                            if debug_verbose:
+                                print(f"   📏 Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
                             
                             # Test if file is complete by loading it
                             try:
@@ -1267,38 +1278,32 @@ def _process_subject(row):
                                 test_voxels = np.sum(test_data > 0)
                                 
                                 if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # ✅ Lowered from 0.05 to 0.01
-                                    print(f"   ✅ Attempt {attempt + 1}: Save successful!")
+                                    if debug_verbose:
+                                        print(f"   ✅ Attempt {attempt + 1}: Save successful!")
                                     save_successful = True
                                     break
                                 else:
-                                    print(f"   ⚠️ Attempt {attempt + 1}: Verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
+                                    print(f"❌ {subject_id}: Attempt {attempt + 1} verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
                                     if mask_output_path.exists():
-                                        mask_output_path.unlink()  # Delete failed file
+                                        mask_output_path.unlink()
                             except Exception as load_error:
-                                print(f"   ❌ Attempt {attempt + 1}: Cannot load saved file: {load_error}")
+                                print(f"❌ {subject_id}: Attempt {attempt + 1} cannot load saved file: {load_error}")
                                 if mask_output_path.exists():
-                                    mask_output_path.unlink()  # Delete corrupted file
+                                    mask_output_path.unlink()
                         else:
-                            print(f"   ❌ Attempt {attempt + 1}: File was not created")
+                            print(f"❌ {subject_id}: Attempt {attempt + 1} file was not created")
                     
                     except Exception as save_error:
-                        print(f"   ❌ Attempt {attempt + 1}: Save error: {save_error}")
+                        print(f"❌ {subject_id}: Attempt {attempt + 1} save error: {save_error}")
                         if mask_output_path.exists():
-                            mask_output_path.unlink()  # Clean up partial file
+                            mask_output_path.unlink()
 
                 if not save_successful:
                     raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
 
-                # ✅ FINAL VERIFICATION WITH ORIGINAL THRESHOLD
-                if not verify_output_integrity(mask_output_path, min_size_mb=0.01):  # ✅ Lowered from 0.05 to 0.01
-                    actual_size = mask_output_path.stat().st_size / (1024*1024)
-                    print(f"   ❌ Final verification failed - actual size: {actual_size:.2f}MB")
-                    
-                    if mask_output_path.exists():
-                        mask_output_path.unlink()
-                    raise RuntimeError(f"Mask file verification failed: {mask_output_path}")
-
-                print(f"   ✅ Mask successfully saved and verified!")
+                # ✅ ONLY print final success if verbose
+                if debug_verbose:
+                    print(f"   ✅ Mask successfully saved and verified!")
 
             except Exception as e:
                 print(f"   ❌ Mask creation/saving failed: {str(e)}")
@@ -1322,32 +1327,99 @@ def _process_subject(row):
             raise RuntimeError(f"Pipeline failed: {result.get('error', 'Unknown error')}")
 
     except Exception as e:
+        error_type = "unknown_error"
+        if "Error -3" in str(e) or "decompressing" in str(e):
+            error_type = "gzip_corruption"
+        elif "process cannot access" in str(e):
+            error_type = "file_access_conflict"
+        elif "FileCorruptionError" in str(type(e).__name__):
+            error_type = "input_corruption"
+            
         return {
             "status": "failed",
             "subject_id": row.get("subject_id", "unknown"),
             "site": row.get("site", "UnknownSite"), 
             "error": str(e),
-            "error_type": "preprocessing_with_verification",
+            "error_type": error_type,
             "message": f"Failed: {str(e)}"
         }
 
-def atomic_nifti_save(img, final_path):
-    """Save NIfTI atomically to prevent corruption"""
-    temp_path = final_path.with_suffix('.tmp')
+class FileCorruptionError(Exception):
+    """Custom exception for file corruption"""
+    pass
+
+def validate_input_file(file_path: Path) -> dict:
+    """Validate input file before processing"""
+    validation = {
+        'valid': False,
+        'error_type': None,
+        'message': None,
+        'file_size_mb': 0
+    }
+    
     try:
-        # Save to temporary file first
-        nib.save(img, temp_path)
+        if not file_path.exists():
+            validation['error_type'] = 'missing_file'
+            validation['message'] = f"File not found: {file_path}"
+            return validation
         
-        # Verify temporary file
-        test_img = nib.load(temp_path)
+        # Check file size
+        file_size = file_path.stat().st_size
+        validation['file_size_mb'] = file_size / (1024 * 1024)
         
-        # Atomic move to final location
-        temp_path.rename(final_path)
-        return True
+        if file_size == 0:
+            validation['error_type'] = 'empty_file'
+            validation['message'] = "File is empty (0 bytes)"
+            return validation
+        
+        if file_size < 1024 * 1024:  # Less than 1MB is suspicious for fMRI
+            validation['error_type'] = 'file_too_small'
+            validation['message'] = f"File suspiciously small: {validation['file_size_mb']:.2f}MB"
+            return validation
+        
+        # Test gzip integrity for .gz files
+        if str(file_path).endswith('.gz'):
+            try:
+                with gzip.open(file_path, 'rb') as gz_file:
+                    # Read first chunk to test decompression
+                    chunk = gz_file.read(1024 * 1024)  # 1MB
+                    if len(chunk) == 0:
+                        validation['error_type'] = 'empty_gzip'
+                        validation['message'] = "Gzip file decompresses to empty"
+                        return validation
+            except Exception as gz_error:
+                validation['error_type'] = 'gzip_corruption'
+                validation['message'] = f"Gzip decompression failed: {str(gz_error)}"
+                return validation
+        
+        # Test NIfTI loading
+        try:
+            img = nib.load(file_path)
+            shape = img.shape
+            
+            if len(shape) < 3:
+                validation['error_type'] = 'invalid_dimensions'
+                validation['message'] = f"Invalid NIfTI dimensions: {shape}"
+                return validation
+                
+            if len(shape) == 4 and shape[3] < 50:  # fMRI should have reasonable timepoints
+                validation['error_type'] = 'insufficient_timepoints'
+                validation['message'] = f"Too few timepoints: {shape[3]}"
+                return validation
+            
+        except Exception as nii_error:
+            validation['error_type'] = 'nifti_loading_error'
+            validation['message'] = f"Cannot load NIfTI: {str(nii_error)}"
+            return validation
+        
+        validation['valid'] = True
+        validation['message'] = f"File validated successfully ({validation['file_size_mb']:.1f}MB)"
+        return validation
+        
     except Exception as e:
-        if temp_path.exists():
-            temp_path.unlink()
-        raise e
+        validation['error_type'] = 'validation_error'
+        validation['message'] = f"Validation failed: {str(e)}"
+        return validation
 
 
 
