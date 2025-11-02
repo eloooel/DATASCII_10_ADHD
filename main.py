@@ -225,17 +225,31 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         for subj in missing_preprocessing[:10]:  # Show first 10
             print(f"  - {subj}")
 
-        parcellation_path = Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii")
+        # Try both possible atlas directory structures
+        parcellation_candidates = [
+            Path("atlas_schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii"),
+            Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii"),
+            Path("atlas/Schaefer-200/Schaefer2018_200Parcels_7Networks_order_FSLMNI152_2mm.nii.gz"),
+        ]
         
-        # Check if atlas exists before proceeding
-        if not parcellation_path.exists():
-            print(f"Atlas file not found at: {parcellation_path.absolute()}")
-            print("Available atlas files:")
-            atlas_dir = Path("atlas")
-            if atlas_dir.exists():
-                for f in atlas_dir.rglob("*.nii*"):
-                    print(f"  - {f}")
-            raise ValueError(f"CRITICAL: Could not find Schaefer parcellation at {parcellation_path}. "
+        parcellation_path = None
+        for candidate in parcellation_candidates:
+            if candidate.exists():
+                parcellation_path = candidate
+                print(f"✅ Found atlas: {parcellation_path}")
+                break
+        
+        if parcellation_path is None:
+            print(f"❌ CRITICAL: Atlas file not found!")
+            print(f"Searched in:")
+            for candidate in parcellation_candidates:
+                print(f"  - {candidate.absolute()}")
+            print("\nAvailable atlas files:")
+            for atlas_dir in [Path("atlas"), Path("atlas_schaefer-200")]:
+                if atlas_dir.exists():
+                    for f in atlas_dir.rglob("*.nii*"):
+                        print(f"  - {f}")
+            raise ValueError(f"CRITICAL: Could not find Schaefer parcellation. "
                            "Feature extraction cannot proceed without real parcellation atlas.")
         
         parcellation = SchaeferParcellation(parcellation_path)
