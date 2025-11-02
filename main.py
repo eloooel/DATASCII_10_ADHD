@@ -474,14 +474,15 @@ def run_training(feature_manifest: Path, demographics: Path,
     
     # Evaluate
     from torch.utils.data import DataLoader
-    from training.dataset import ADHDDataset
+    from training.dataset import ADHDDataset, collate_fn
     
     test_dataset = ADHDDataset(test_data)
     test_loader = DataLoader(
         test_dataset,
         batch_size=training_config.get('batch_size', 32),
         shuffle=False,
-        num_workers=training_config.get('num_workers', 4)
+        num_workers=training_config.get('num_workers', 4),
+        collate_fn=collate_fn
     )
     
     _, test_acc, test_metrics = trainer.validate(test_loader)

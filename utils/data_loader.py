@@ -229,7 +229,7 @@ class DataDiscovery:
                             
                             # Find participant ID column
                             id_col = None
-                            for col in ['participant_id', 'Subject', 'ScanDir ID', 'subject_id']:
+                            for col in ['participant_id', 'Subject', 'ScanDir ID', 'ID', 'subject_id']:
                                 if col in df.columns:
                                     id_col = col
                                     break
@@ -252,14 +252,24 @@ class DataDiscovery:
                                     
                                     # Convert diagnosis to binary (0=Control, 1=ADHD)
                                     dx_value = row[dx_col]
-                                    if pd.isna(dx_value):
-                                        diagnosis = 0  # Default to control
-                                    elif dx_value in [0, '0', 'TDC', 'Control', 'control', 'TD']:
+                                    
+                                    # Handle missing/unknown values - SKIP these subjects
+                                    if pd.isna(dx_value) or str(dx_value).strip().lower() in ['pending', 'unknown', 'n/a', '']:
+                                        continue  # Skip subjects with unknown diagnosis
+                                    
+                                    # Convert to string for comparison
+                                    dx_str = str(dx_value).strip()
+                                    
+                                    # ADHD-200 numeric codes: 0=Control, 1=ADHD-Combined, 2=ADHD-H/I, 3=ADHD-Inattentive
+                                    if dx_value in [0, '0'] or dx_str in ['TDC', 'Control', 'control', 'TD', 'Typically Developing Children']:
                                         diagnosis = 0
-                                    elif dx_value in [1, '1', 'ADHD', 'adhd', 'ADHD-C', 'ADHD-I', 'ADHD-H']:
+                                    elif dx_value in [1, 2, 3, '1', '2', '3'] or 'ADHD' in dx_str:
+                                        # Numeric: 1,2,3 = different ADHD subtypes
+                                        # String: ADHD-Combined, ADHD-Inattentive, ADHD-Hyperactive/Impulsive
                                         diagnosis = 1
                                     else:
-                                        diagnosis = 0  # Default unknown to control
+                                        print(f"  ⚠️  Unknown diagnosis value '{dx_value}' for {subj_id}, skipping")
+                                        continue  # Skip unknown values
                                     
                                     participants_info[subj_id] = diagnosis
                                 

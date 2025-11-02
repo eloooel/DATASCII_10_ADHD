@@ -12,7 +12,7 @@ from tqdm import tqdm
 import json
 from datetime import datetime
 
-from .dataset import ADHDDataset
+from .dataset import ADHDDataset, collate_fn
 from .data_splitter import DataSplitter
 from models import GNNSTANHybrid
 from optimization import EarlyStopping, FocalLoss
@@ -223,7 +223,9 @@ class TrainingOptimizationModule:
             batch_size=self.training_config.get('batch_size', 32),
             shuffle=True,
             num_workers=self.training_config.get('num_workers', 4),
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_fn,
+            drop_last=True  # Drop incomplete batches to avoid BatchNorm errors with batch_size=1
         )
         
         val_loader = DataLoader(
@@ -231,7 +233,9 @@ class TrainingOptimizationModule:
             batch_size=self.training_config.get('batch_size', 32),
             shuffle=False,
             num_workers=self.training_config.get('num_workers', 4),
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=collate_fn,
+            drop_last=False  # Keep all validation samples
         )
         
         # Reset early stopping

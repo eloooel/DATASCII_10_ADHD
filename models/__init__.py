@@ -12,12 +12,14 @@ from .gnn import EnhancedGNNBranch
 from .stan import EnhancedSTANBranch, MultiHeadSpatioTemporalAttention
 from .fusion_layer import CrossModalFusion
 from .gnn_stan_hybrid import GNNSTANHybrid
+from .gnn_stan_hybrid_optimized import MemoryOptimizedGNNSTAN
 
 __all__ = [
     'EnhancedGNNBranch',
     'EnhancedSTANBranch', 
     'MultiHeadSpatioTemporalAttention',
     'CrossModalFusion',
-    'GNNSTANHybrid'
+    'GNNSTANHybrid',
+    'MemoryOptimizedGNNSTAN'
 ]
 

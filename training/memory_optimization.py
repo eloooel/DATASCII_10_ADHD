@@ -5,7 +5,8 @@ Implements gradient checkpointing, mixed precision training, and memory-efficien
 
 import torch
 import torch.nn as nn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from typing import Optional, Callable
 import gc
 
@@ -30,7 +31,7 @@ class MemoryEfficientTrainer:
         self.gradient_accumulation_steps = gradient_accumulation_steps
         
         # Initialize gradient scaler for mixed precision
-        self.scaler = GradScaler() if self.use_amp else None
+        self.scaler = GradScaler('cuda') if self.use_amp else None
         
         print(f"Memory Optimization Settings:")
         print(f"  - Mixed Precision (AMP): {self.use_amp}")
@@ -70,7 +71,7 @@ class MemoryEfficientTrainer:
         """
         # Forward pass with optional mixed precision
         if self.use_amp:
-            with autocast():
+            with autocast('cuda'):
                 outputs = model(batch['fc_matrix'], batch['timeseries'])
                 loss = criterion(outputs, batch['label'])
                 loss = loss / self.gradient_accumulation_steps

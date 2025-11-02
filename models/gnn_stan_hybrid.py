@@ -40,7 +40,7 @@ class GNNSTANHybrid(nn.Module):
         
         # Initialize GNN for FC matrices
         self.gnn_encoder = EnhancedGNNBranch(
-            input_dim=self.n_rois,  # Number of ROIs
+            input_dim=4,  # Node features: degree, clustering, eigen_centrality, local_eff
             **gnn_config if gnn_config else {}
         )
         
@@ -106,11 +106,11 @@ class GNNSTANHybrid(nn.Module):
         # Extract node features from FC matrix
         node_features = self._extract_node_features(fc_matrix)
         
-        # GNN branch forward pass
-        gnn_embedding = self.gnn_encoder(node_features, edge_index, batch)
+        # GNN branch forward pass - returns (embedding, attention_maps)
+        gnn_embedding, _ = self.gnn_encoder(node_features, edge_index, batch)
         
-        # STAN branch forward pass
-        stan_embedding = self.stan_encoder(roi_timeseries)
+        # STAN branch forward pass - returns (embedding, attention_weights)
+        stan_embedding, _ = self.stan_encoder(roi_timeseries)
         
         # Cross-modal fusion
         fused_embedding = self.fusion(gnn_embedding, stan_embedding)
@@ -125,7 +125,9 @@ class GNNSTANHybrid(nn.Module):
         batch_size, n_rois, _ = fc_matrix.shape
         
         # Threshold to keep only strong connections (e.g., top 20%)
-        threshold = torch.quantile(torch.abs(fc_matrix), 0.8, dim=(1,2), keepdim=True)
+        # PyTorch 2.6.0 doesn't support tuple for dim parameter, so flatten first
+        fc_flat = torch.abs(fc_matrix).view(batch_size, -1)
+        threshold = torch.quantile(fc_flat, 0.8, dim=1, keepdim=True).unsqueeze(-1)
         mask = torch.abs(fc_matrix) > threshold
         
         # Get edge indices for first sample (assume same structure for batch)
