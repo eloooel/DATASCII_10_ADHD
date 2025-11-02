@@ -1058,7 +1058,7 @@ def _process_subject(row):
         # Check available memory before processing
         memory = psutil.virtual_memory()
         if memory.percent > 85:
-            print(f"⚠️ High memory usage ({memory.percent:.1f}%) - forcing cleanup")
+            print(f"High memory usage ({memory.percent:.1f}%) - forcing cleanup")
             gc.collect()
             
             # Wait for memory to settle
@@ -1183,7 +1183,6 @@ def _process_subject(row):
                 proc_nifti = nib.Nifti1Image(np.array(proc_data), original_affine)
 
             # Save functional file
-            print(f"   Saving functional file: {func_output_path.name}")
             nib.save(proc_nifti, func_output_path)
 
             # ✅ VERIFY FUNCTIONAL FILE
@@ -1192,31 +1191,35 @@ def _process_subject(row):
                     func_output_path.unlink()
                 raise RuntimeError(f"Functional file verification failed: {func_output_path}")
 
-            # ✅ ENHANCED MASK CREATION AND SAVING
-            print(f"   Creating brain mask for {subject_id}")
             try:
                 brain_mask = result["brain_mask"]
                 
-                # ✅ DETAILED MASK VALIDATION
-                print(f"   🔍 Mask details before saving:")
-                print(f"   - Data type: {brain_mask.dtype}")
-                print(f"   - Shape: {brain_mask.shape}")
-                print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
-                print(f"   - Unique values: {np.unique(brain_mask)}")
-                
+                # ✅ ALWAYS calculate these values (needed for validation)
                 mask_voxels = np.sum(brain_mask > 0)
                 mask_coverage = mask_voxels / brain_mask.size
                 expected_size_mb = brain_mask.nbytes / (1024 * 1024)
                 
-                print(f"   - Non-zero voxels: {mask_voxels}")
-                print(f"   - Coverage: {mask_coverage*100:.1f}%")
-                print(f"   - Memory size: {expected_size_mb:.2f}MB")
+                # ✅ Only print details if verbose
+                if debug_verbose:
+                    print(f"   🔍 Mask details before saving:")
+                    print(f"   - Data type: {brain_mask.dtype}")
+                    print(f"   - Shape: {brain_mask.shape}")
+                    print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
+                    print(f"   - Unique values: {np.unique(brain_mask)}")
+                    print(f"   - Non-zero voxels: {mask_voxels}")
+                    print(f"   - Coverage: {mask_coverage*100:.1f}%")
+                    print(f"   - Memory size: {expected_size_mb:.2f}MB")
                 
-                if mask_voxels < 1000:
-                    raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
-                
-                if mask_coverage < 0.01:
-                    raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
+                    # Quality checks in debug mode
+                    if mask_voxels < 1000:
+                        raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
+                    
+                    if mask_coverage < 0.01:
+                        raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
+            
+                # ✅ Basic validation (always runs)
+                if mask_voxels < 100:  # Very basic check
+                    raise ValueError(f"Brain mask has too few voxels: {mask_voxels}")
                 
                 # ✅ ENSURE PROPER DATA TYPE AND AFFINE
                 # Force uint8 data type explicitly
@@ -1263,13 +1266,11 @@ def _process_subject(row):
                         # Wait briefly for file system to settle
                         time.sleep(0.1)
                         
-                        # ✅ IMMEDIATE VERIFICATION
                         if mask_output_path.exists():
                             saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
                             
-                            # ✅ ONLY print attempt details if verbose
                             if debug_verbose:
-                                print(f"   📏 Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
+                                print(f"Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
                             
                             # Test if file is complete by loading it
                             try:
@@ -1301,12 +1302,11 @@ def _process_subject(row):
                 if not save_successful:
                     raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
 
-                # ✅ ONLY print final success if verbose
                 if debug_verbose:
-                    print(f"   ✅ Mask successfully saved and verified!")
+                    print(f"Mask successfully saved and verified!")
 
             except Exception as e:
-                print(f"   ❌ Mask creation/saving failed: {str(e)}")
+                print(f"Mask creation/saving failed: {str(e)}")
                 raise RuntimeError(f"Brain mask generation failed: {str(e)}")
 
             # Save confounds
