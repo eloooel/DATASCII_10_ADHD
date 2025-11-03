@@ -205,25 +205,39 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
     try:
         # Load metadata
         metadata = pd.read_csv(metadata_out)
-        print(f"Loaded metadata for {len(metadata)} subjects")
+        print(f"Loaded metadata for {len(metadata)} total entries")
         
         # Debugging output
         print(f"Sites in metadata: {metadata['site'].value_counts()}")
 
-        # Check which subjects have preprocessing files
+        # ✅ FILTER to only subjects with preprocessing files
+        print("\n🔍 Filtering to subjects with preprocessing files...")
+        preprocessed_subjects = []
         missing_preprocessing = []
+        
         for _, row in metadata.iterrows():
             site = row['site']
             subject_id = row['subject_id']
             func_path = preproc_out / site / subject_id / "func_preproc.nii.gz"
             mask_path = preproc_out / site / subject_id / "mask.nii.gz"
             
-            if not func_path.exists() or not mask_path.exists():
+            if func_path.exists() and mask_path.exists():
+                preprocessed_subjects.append(row)
+            else:
                 missing_preprocessing.append(f"{site}/{subject_id}")
 
-        print(f"Missing preprocessing files for {len(missing_preprocessing)} subjects:")
-        for subj in missing_preprocessing[:10]:  # Show first 10
-            print(f"  - {subj}")
+        # Convert to DataFrame with only preprocessed subjects
+        metadata = pd.DataFrame(preprocessed_subjects)
+        
+        print(f"\n📊 Preprocessing Status:")
+        print(f"   ✅ Ready for feature extraction: {len(metadata)} subjects")
+        print(f"   ⏭️  Missing preprocessing: {len(missing_preprocessing)} subjects")
+        
+        if len(metadata) == 0:
+            print("\n❌ No preprocessed subjects found! Run preprocessing first.")
+            return []
+        
+        print(f"\n🎯 Will extract features from {len(metadata)} preprocessed subjects")
 
         # Try both possible atlas directory structures
         parcellation_candidates = [

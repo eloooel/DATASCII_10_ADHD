@@ -1079,16 +1079,33 @@ def _process_subject(row):
         
         pipeline = PreprocessingPipeline(device=device)
         subject_id = row["subject_id"]
-        func_path = Path(row["input_path"])
         
-        # ✅ ONLY print validation if verbose or there's an issue
-        corruption_check = validate_input_file(func_path)
+        # ✅ MULTI-RUN SUPPORT: Check if we need to concatenate multiple runs
+        # This happens when metadata has multiple rows for the same subject
+        if 'all_runs' in row and isinstance(row['all_runs'], list) and len(row['all_runs']) > 1:
+            # Multi-run concatenation mode
+            func_paths = [Path(p) for p in row['all_runs']]
+            num_runs = len(func_paths)
+            print(f"📊 {subject_id}: Processing {num_runs} runs for concatenation")
+            multi_run = True
+        else:
+            # Single run mode (backward compatibility)
+            func_paths = [Path(row["input_path"])]
+            num_runs = 1
+            multi_run = False
         
-        if not corruption_check['valid']:
-            print(f"❌ {subject_id}: Input validation failed - {corruption_check['message']}")
-            raise FileCorruptionError(f"Input file corrupted: {corruption_check['error_type']}")
-        elif debug_verbose:
-            print(f"🔍 Validating input file: {subject_id}")
+        # ✅ VALIDATE ALL INPUT FILES
+        for idx, func_path in enumerate(func_paths):
+            corruption_check = validate_input_file(func_path)
+            
+            if not corruption_check['valid']:
+                print(f"❌ {subject_id} run-{idx+1}/{num_runs}: Input validation failed - {corruption_check['message']}")
+                raise FileCorruptionError(f"Input file corrupted: {corruption_check['error_type']}")
+            elif debug_verbose:
+                print(f"🔍 Validating input file: {subject_id} run-{idx+1}/{num_runs}")
+        
+        # Extract site name from first run
+        func_path = func_paths[0]
         
         # Extract site name
         site_name = (
@@ -1097,16 +1114,17 @@ def _process_subject(row):
             func_path.parts[-5] if len(func_path.parts) >= 5 else "UnknownSite"
         )
 
-        # Verify input file exists
-        if not func_path.exists():
-            raise FileNotFoundError(f"Input file not found: {func_path.absolute()}")
-        
-        if not func_path.is_file():
-            raise ValueError(f"Input path is not a file: {func_path.absolute()}")
+        # Verify all input files exist
+        for idx, func_path in enumerate(func_paths):
+            if not func_path.exists():
+                raise FileNotFoundError(f"Run {idx+1}/{num_runs} file not found: {func_path.absolute()}")
+            
+            if not func_path.is_file():
+                raise ValueError(f"Run {idx+1}/{num_runs} path is not a file: {func_path.absolute()}")
 
-        # Check file extension
-        if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
-            raise ValueError(f"Invalid file extension. Expected .nii or .nii.gz, got: {func_path.suffix}")
+            # Check file extension
+            if not str(func_path).lower().endswith(('.nii', '.nii.gz')):
+                raise ValueError(f"Run {idx+1}/{num_runs} invalid file extension. Expected .nii or .nii.gz, got: {func_path.suffix}")
 
         # Create output directory
         subj_out = Path(row.get("out_dir", ".")) / site_name / subject_id
@@ -1156,16 +1174,69 @@ def _process_subject(row):
                     memory_optimized_config['denoising']['acompcor']['n_components'] = 3
             pipeline.config = memory_optimized_config
 
-        # Test NIfTI loading
-        try:
-            test_load = nib.load(str(func_path.absolute()))
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
+        # ✅ MULTI-RUN PROCESSING: Process each run separately, then concatenate
+        if multi_run:
+            print(f"   Processing {num_runs} runs for {subject_id}...")
+            preprocessed_runs = []
+            
+            for run_idx, run_path in enumerate(func_paths):
+                print(f"   📊 Run {run_idx+1}/{num_runs}: {run_path.name}")
+                
+                # Test NIfTI loading
+                try:
+                    test_load = nib.load(str(run_path.absolute()))
+                except Exception as e:
+                    raise FileNotFoundError(f"Failed to load run {run_idx+1} ({run_path.absolute()}): {str(e)}")
 
-        # Run preprocessing
-        result = pipeline.process(str(func_path.absolute()), subject_id)
+                # Run preprocessing on this run
+                result = pipeline.process(str(run_path.absolute()), f"{subject_id}_run{run_idx+1}")
 
-        if result["status"] == "success":
+                if result["status"] != "success":
+                    raise RuntimeError(f"Preprocessing failed for run {run_idx+1}: {result.get('error', 'Unknown error')}")
+
+                # Get processed data
+                proc_data = result["processed_data"]
+                
+                # Convert to numpy array
+                if torch.is_tensor(proc_data):
+                    proc_array = proc_data.cpu().numpy()
+                elif isinstance(proc_data, nib.Nifti1Image):
+                    proc_array = proc_data.get_fdata()
+                else:
+                    proc_array = np.array(proc_data)
+                
+                preprocessed_runs.append(proc_array)
+                print(f"      ✅ Run {run_idx+1} completed: shape {proc_array.shape}")
+            
+            # Concatenate all runs along time dimension (axis=-1)
+            print(f"   🔗 Concatenating {num_runs} runs...")
+            concatenated_data = np.concatenate(preprocessed_runs, axis=-1)
+            print(f"      Final shape: {concatenated_data.shape} ({concatenated_data.shape[-1]} timepoints total)")
+            
+            # Get affine from first run
+            original_img = nib.load(str(func_paths[0].absolute()))
+            original_affine = original_img.affine
+            
+            # Create concatenated NIfTI
+            proc_nifti = nib.Nifti1Image(concatenated_data, original_affine)
+            
+            # Use brain mask from last run (they should all be similar after normalization)
+            brain_mask = result["brain_mask"]
+            
+        else:
+            # SINGLE RUN MODE (original logic)
+            # Test NIfTI loading
+            try:
+                test_load = nib.load(str(func_path.absolute()))
+            except Exception as e:
+                raise FileNotFoundError(f"Failed to load NIfTI file ({func_path.absolute()}): {str(e)}")
+
+            # Run preprocessing
+            result = pipeline.process(str(func_path.absolute()), subject_id)
+
+            if result["status"] != "success":
+                raise RuntimeError(f"Preprocessing failed: {result.get('error', 'Unknown error')}")
+
             # Get processed data
             proc_data = result["processed_data"] 
             
@@ -1181,133 +1252,139 @@ def _process_subject(row):
                 proc_nifti = proc_data
             else:
                 proc_nifti = nib.Nifti1Image(np.array(proc_data), original_affine)
-
-            # Save functional file
-            nib.save(proc_nifti, func_output_path)
-
-            # ✅ VERIFY FUNCTIONAL FILE
-            if not verify_output_integrity(func_output_path, min_size_mb=10.0, verbose=False):  # ✅ Add verbose=False
-                if func_output_path.exists():
-                    func_output_path.unlink()
-                raise RuntimeError(f"Functional file verification failed: {func_output_path}")
-
-            try:
-                brain_mask = result["brain_mask"]
-                
-                # ✅ ALWAYS calculate these values (needed for validation)
-                mask_voxels = np.sum(brain_mask > 0)
-                mask_coverage = mask_voxels / brain_mask.size
-                expected_size_mb = brain_mask.nbytes / (1024 * 1024)
-                
-                # ✅ Only print details if verbose
-                if debug_verbose:
-                    print(f"   🔍 Mask details before saving:")
-                    print(f"   - Data type: {brain_mask.dtype}")
-                    print(f"   - Shape: {brain_mask.shape}")
-                    print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
-                    print(f"   - Unique values: {np.unique(brain_mask)}")
-                    print(f"   - Non-zero voxels: {mask_voxels}")
-                    print(f"   - Coverage: {mask_coverage*100:.1f}%")
-                    print(f"   - Memory size: {expected_size_mb:.2f}MB")
-                
-                    # Quality checks in debug mode
-                    if mask_voxels < 1000:
-                        raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
-                    
-                    if mask_coverage < 0.01:
-                        raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
             
-                # ✅ Basic validation (always runs)
-                if mask_voxels < 100:  # Very basic check
-                    raise ValueError(f"Brain mask has too few voxels: {mask_voxels}")
-                
-                # ✅ ENSURE PROPER DATA TYPE AND AFFINE
-                # Force uint8 data type explicitly
-                clean_mask = brain_mask.astype(np.uint8)
-                
-                # Get the original affine from input file
-                original_img = nib.load(str(func_path.absolute()))
-                original_affine = original_img.affine
-                original_header = original_img.header.copy()
-                
-                # ✅ CREATE MASK NIFTI WITH EXPLICIT SETTINGS
-                mask_nifti = nib.Nifti1Image(
-                    clean_mask,
-                    original_affine,
-                    header=None  # Let nibabel create a fresh header
-                )
-                
-                # ✅ FORCE CORRECT HEADER SETTINGS
-                mask_header = mask_nifti.header
-                mask_header.set_data_dtype(np.uint8)  # Explicitly set uint8
-                mask_header.set_slope_inter(1, 0)     # No scaling
-                
-                # ✅ ONLY print details if verbose
-                if debug_verbose:
-                    print(f"   🔍 NIfTI image details:")
-                    print(f"   - NIfTI shape: {mask_nifti.shape}")
-                    print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
-                    print(f"   - Header dtype: {mask_header.get_data_dtype()}")
-                
-                # ✅ ROBUST SAVING - ONLY PRINT ERRORS OR IF VERBOSE
-                max_save_attempts = 3
-                save_successful = False
+            brain_mask = result["brain_mask"]
 
-                for attempt in range(max_save_attempts):
-                    try:
-                        # ✅ SAVE WITH EXPLICIT COMPRESSION AND FLUSH
-                        nib.save(mask_nifti, mask_output_path)
+        # COMMON SAVING LOGIC (both single and multi-run)
+        # Save functional file
+        nib.save(proc_nifti, func_output_path)
+
+        # ✅ VERIFY FUNCTIONAL FILE
+        if not verify_output_integrity(func_output_path, min_size_mb=10.0, verbose=False):
+            if func_output_path.exists():
+                func_output_path.unlink()
+            raise RuntimeError(f"Functional file verification failed: {func_output_path}")
+
+        try:
+            brain_mask = result["brain_mask"]
+            
+            # ✅ ALWAYS calculate these values (needed for validation)
+            mask_voxels = np.sum(brain_mask > 0)
+            mask_coverage = mask_voxels / brain_mask.size
+            expected_size_mb = brain_mask.nbytes / (1024 * 1024)
+            
+            # ✅ Only print details if verbose
+            if debug_verbose:
+                print(f"   🔍 Mask details before saving:")
+                print(f"   - Data type: {brain_mask.dtype}")
+                print(f"   - Shape: {brain_mask.shape}")
+                print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
+                print(f"   - Unique values: {np.unique(brain_mask)}")
+                print(f"   - Non-zero voxels: {mask_voxels}")
+                print(f"   - Coverage: {mask_coverage*100:.1f}%")
+                print(f"   - Memory size: {expected_size_mb:.2f}MB")
+            
+                # Quality checks in debug mode
+                if mask_voxels < 1000:
+                    raise ValueError(f"Brain mask has too few voxels: {mask_voxels} (expected >1000)")
+                
+                if mask_coverage < 0.01:
+                    raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
+        
+            # ✅ Basic validation (always runs)
+            if mask_voxels < 100:  # Very basic check
+                raise ValueError(f"Brain mask has too few voxels: {mask_voxels}")
+            
+            # ✅ ENSURE PROPER DATA TYPE AND AFFINE
+            # Force uint8 data type explicitly
+            clean_mask = brain_mask.astype(np.uint8)
+            
+            # Get the original affine from input file (use first run for multi-run)
+            if multi_run:
+                original_img = nib.load(str(func_paths[0].absolute()))
+            else:
+                original_img = nib.load(str(func_path.absolute()))
+            original_affine = original_img.affine
+            original_header = original_img.header.copy()
+            
+            # ✅ CREATE MASK NIFTI WITH EXPLICIT SETTINGS
+            mask_nifti = nib.Nifti1Image(
+                clean_mask,
+                original_affine,
+                header=None  # Let nibabel create a fresh header
+            )
+            
+            # ✅ FORCE CORRECT HEADER SETTINGS
+            mask_header = mask_nifti.header
+            mask_header.set_data_dtype(np.uint8)  # Explicitly set uint8
+            mask_header.set_slope_inter(1, 0)     # No scaling
+            
+            # ✅ ONLY print details if verbose
+            if debug_verbose:
+                print(f"   🔍 NIfTI image details:")
+                print(f"   - NIfTI shape: {mask_nifti.shape}")
+                print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
+                print(f"   - Header dtype: {mask_header.get_data_dtype()}")
+            
+            # ✅ ROBUST SAVING - ONLY PRINT ERRORS OR IF VERBOSE
+            max_save_attempts = 3
+            save_successful = False
+
+            for attempt in range(max_save_attempts):
+                try:
+                    # ✅ SAVE WITH EXPLICIT COMPRESSION AND FLUSH
+                    nib.save(mask_nifti, mask_output_path)
+                    
+                    # ✅ FORCE FILE SYSTEM SYNC
+                    import os
+                    if hasattr(os, 'sync'):
+                        os.sync()  # Unix/Linux
+                    
+                    # Wait briefly for file system to settle
+                    time.sleep(0.1)
+                    
+                    if mask_output_path.exists():
+                        saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
                         
-                        # ✅ FORCE FILE SYSTEM SYNC
-                        import os
-                        if hasattr(os, 'sync'):
-                            os.sync()  # Unix/Linux
+                        if debug_verbose:
+                            print(f"Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
                         
-                        # Wait briefly for file system to settle
-                        time.sleep(0.1)
-                        
-                        if mask_output_path.exists():
-                            saved_size_mb = mask_output_path.stat().st_size / (1024*1024)
+                        # Test if file is complete by loading it
+                        try:
+                            test_load = nib.load(mask_output_path)
+                            test_data = test_load.get_fdata()
+                            test_voxels = np.sum(test_data > 0)
                             
-                            if debug_verbose:
-                                print(f"Attempt {attempt + 1}: Saved file size: {saved_size_mb:.2f}MB")
-                            
-                            # Test if file is complete by loading it
-                            try:
-                                test_load = nib.load(mask_output_path)
-                                test_data = test_load.get_fdata()
-                                test_voxels = np.sum(test_data > 0)
-                                
-                                if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # ✅ Lowered from 0.05 to 0.01
-                                    if debug_verbose:
-                                        print(f"   ✅ Attempt {attempt + 1}: Save successful!")
-                                    save_successful = True
-                                    break
-                                else:
-                                    print(f"❌ {subject_id}: Attempt {attempt + 1} verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
-                                    if mask_output_path.exists():
-                                        mask_output_path.unlink()
-                            except Exception as load_error:
-                                print(f"❌ {subject_id}: Attempt {attempt + 1} cannot load saved file: {load_error}")
+                            if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # ✅ Lowered from 0.05 to 0.01
+                                if debug_verbose:
+                                    print(f"   ✅ Attempt {attempt + 1}: Save successful!")
+                                save_successful = True
+                                break
+                            else:
+                                print(f"❌ {subject_id}: Attempt {attempt + 1} verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
                                 if mask_output_path.exists():
                                     mask_output_path.unlink()
-                        else:
-                            print(f"❌ {subject_id}: Attempt {attempt + 1} file was not created")
-                    
-                    except Exception as save_error:
-                        print(f"❌ {subject_id}: Attempt {attempt + 1} save error: {save_error}")
-                        if mask_output_path.exists():
-                            mask_output_path.unlink()
+                        except Exception as load_error:
+                            print(f"❌ {subject_id}: Attempt {attempt + 1} cannot load saved file: {load_error}")
+                            if mask_output_path.exists():
+                                mask_output_path.unlink()
+                    else:
+                        print(f"❌ {subject_id}: Attempt {attempt + 1} file was not created")
+                
+                except Exception as save_error:
+                    print(f"❌ {subject_id}: Attempt {attempt + 1} save error: {save_error}")
+                    if mask_output_path.exists():
+                        mask_output_path.unlink()
 
-                if not save_successful:
-                    raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
+            if not save_successful:
+                raise RuntimeError(f"Failed to save mask after {max_save_attempts} attempts")
 
-                if debug_verbose:
-                    print(f"Mask successfully saved and verified!")
-
-            except Exception as e:
-                print(f"Mask creation/saving failed: {str(e)}")
-                raise RuntimeError(f"Brain mask generation failed: {str(e)}")
+            if debug_verbose:
+                print(f"Mask successfully saved and verified!")
+        
+        except Exception as e:
+            print(f"Mask creation/saving failed: {str(e)}")
+            raise RuntimeError(f"Brain mask generation failed: {str(e)}")
 
             # Save confounds
             confounds_path = subj_out / "confounds.csv"
