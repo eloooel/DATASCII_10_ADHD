@@ -147,9 +147,14 @@ def preprocess_all_sites(sites=None, parallel=True, batch_size=8):
                 )
                 
                 # Update overall progress with batch results
-                success_in_batch = sum(1 for r in results if r["status"] == "success")
-                failed_in_batch = sum(1 for r in results if r["status"] == "failed")
-                pbar.set_postfix_str(f"✅ {success_in_batch} ❌ {failed_in_batch}")
+                all_results.extend(results)
+                
+                # Calculate cumulative counts
+                success_count = sum(1 for r in all_results if r["status"] == "success")
+                failed_count = sum(1 for r in all_results if r["status"] == "failed")
+                skipped_count = sum(1 for r in all_results if r.get("skipped", False))
+                
+                pbar.set_postfix_str(f"✅ {success_count} (⏭️ {skipped_count}) ❌ {failed_count}")
                 pbar.update(len(results))
             else:
                 # Sequential processing - update after each subject
@@ -171,8 +176,6 @@ def preprocess_all_sites(sites=None, parallel=True, batch_size=8):
                     failed_count = sum(1 for r in all_results + results if r["status"] == "failed")
                     pbar.set_postfix_str(f"✅ {success_count} ❌ {failed_count}")
                     pbar.update(1)
-            
-            all_results.extend(results)
             
             # Memory cleanup between batches
             import time

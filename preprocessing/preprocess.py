@@ -405,7 +405,8 @@ class PreprocessingPipeline:
             normalized_img = resample_to_img(
                 data_img, 
                 mni_template, 
-                interpolation='linear'
+                interpolation='linear',
+                copy_header=True
             )
             
             self._log_step("spatial_normalization", "success", 
@@ -1138,6 +1139,7 @@ def _process_subject(row):
         if not force_retry and func_output_path.exists() and mask_output_path.exists():
             if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
                 verify_output_integrity(mask_output_path, min_size_mb=0.02)): 
+                print(f"⏭️  {subject_id}: Already processed and verified - SKIPPED")
                 return {
                     "status": "success",
                     "subject_id": subject_id,
