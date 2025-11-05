@@ -21,10 +21,21 @@ if METADATA_PATH.exists():
     existing_metadata = pd.read_csv(METADATA_PATH)
     print(f"\n📊 Existing metadata: {len(existing_metadata)} entries")
     print(existing_metadata['site'].value_counts())
-    existing_ids_runs = set(zip(existing_metadata['subject_id'], existing_metadata['run']))
+    
+    # Convert run to string for consistent comparison
+    existing_metadata['run'] = existing_metadata['run'].astype(str)
+    
+    # Create deduplication keys based on subject_id, run, AND input_path
+    # This prevents duplicates even if run numbers match
+    existing_keys = set(zip(
+        existing_metadata['subject_id'], 
+        existing_metadata['run'],
+        existing_metadata['input_path']
+    ))
+    print(f"📋 Loaded {len(existing_keys)} unique (subject, run, path) combinations")
 else:
     existing_metadata = pd.DataFrame()
-    existing_ids_runs = set()
+    existing_keys = set()
     print("\n⚠️  No existing metadata found, creating new")
 
 # Discover all subjects from all sites
@@ -38,6 +49,9 @@ all_subjects_df = pd.DataFrame(all_subjects)
 if len(all_subjects_df) == 0:
     print("❌ No subjects discovered!")
     exit(1)
+
+# Convert run to string for consistent comparison
+all_subjects_df['run'] = all_subjects_df['run'].astype(str)
 
 print(f"\n✅ Discovered {len(all_subjects_df)} total entries across all sites")
 print(f"\nSites discovered:")
@@ -70,11 +84,20 @@ for site in all_subjects_df['site'].unique():
     else:
         print(f"\n{site}: {n_subjects} subjects (no run info)")
 
-# Filter out entries that already exist (same subject_id AND run)
+# Filter out entries that already exist (same subject_id, run, AND input_path)
 if len(existing_metadata) > 0:
+    # Create comparison key for each discovered entry
     new_subjects = all_subjects_df[
-        ~all_subjects_df.apply(lambda row: (row['subject_id'], row['run']) in existing_ids_runs, axis=1)
+        ~all_subjects_df.apply(
+            lambda row: (row['subject_id'], row['run'], row['input_path']) in existing_keys, 
+            axis=1
+        )
     ]
+    
+    # Report what was filtered out
+    filtered_count = len(all_subjects_df) - len(new_subjects)
+    if filtered_count > 0:
+        print(f"⏭️  Filtered out {filtered_count} entries that already exist in metadata")
 else:
     new_subjects = all_subjects_df
 
@@ -101,6 +124,19 @@ if len(existing_metadata) > 0:
     print(f"\n💾 Backup saved to: {METADATA_PATH_BACKUP}")
 else:
     updated_metadata = new_subjects
+
+# ✅ FINAL SAFETY CHECK: Remove any duplicates that might have slipped through
+print(f"\n🔍 Running final deduplication check...")
+original_count = len(updated_metadata)
+updated_metadata = updated_metadata.drop_duplicates(
+    subset=['subject_id', 'run', 'input_path'], 
+    keep='first'
+)
+dedup_count = original_count - len(updated_metadata)
+if dedup_count > 0:
+    print(f"⚠️  Removed {dedup_count} duplicate entries in final check!")
+else:
+    print(f"✅ No duplicates found - metadata is clean")
 
 # Save updated metadata
 updated_metadata.to_csv(METADATA_PATH, index=False)

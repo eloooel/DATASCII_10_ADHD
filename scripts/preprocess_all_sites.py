@@ -176,6 +176,9 @@ def preprocess_all_sites(sites=None, parallel=True, batch_size=8):
                     failed_count = sum(1 for r in all_results + results if r["status"] == "failed")
                     pbar.set_postfix_str(f"✅ {success_count} ❌ {failed_count}")
                     pbar.update(1)
+                
+                # Add batch results to overall results (was missing!)
+                all_results.extend(results)
             
             # Memory cleanup between batches
             import time
@@ -203,13 +206,24 @@ def preprocess_all_sites(sites=None, parallel=True, batch_size=8):
         if len(failed_subjects) > 10:
             print(f"  ... and {len(failed_subjects) - 10} more")
     
-    # Save results by site
-    results_df = pd.DataFrame(all_results)
-    for site in results_df['site'].unique():
-        site_results = results_df[results_df['site'] == site]
-        results_path = PREPROC_OUT / site / "preprocessing_results.csv"
-        site_results.to_csv(results_path, index=False)
-        print(f"\n💾 {site} results saved to: {results_path}")
+    # Save results by site (only if we have valid results)
+    if all_results and len(all_results) > 0:
+        try:
+            results_df = pd.DataFrame(all_results)
+            
+            # Check if DataFrame has the expected columns
+            if 'site' in results_df.columns and len(results_df) > 0:
+                for site in results_df['site'].unique():
+                    site_results = results_df[results_df['site'] == site]
+                    results_path = PREPROC_OUT / site / "preprocessing_results.csv"
+                    site_results.to_csv(results_path, index=False)
+                    print(f"\n💾 {site} results saved to: {results_path}")
+            else:
+                print(f"\n⚠️  Warning: Results DataFrame missing 'site' column or empty. Skipping results CSV save.")
+        except Exception as e:
+            print(f"\n⚠️  Warning: Could not save results CSV: {e}")
+    else:
+        print(f"\n⚠️  Warning: No results to save (all subjects were skipped or processing failed early)")
     
     return all_results
 
