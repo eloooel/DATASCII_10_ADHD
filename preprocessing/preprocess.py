@@ -1388,22 +1388,20 @@ def _process_subject(row):
             print(f"Mask creation/saving failed: {str(e)}")
             raise RuntimeError(f"Brain mask generation failed: {str(e)}")
 
-            # Save confounds
-            confounds_path = subj_out / "confounds.csv"
-            pd.DataFrame(result["confound_regressors"]).to_csv(confounds_path, index=False)
+        # Save confounds (moved outside the try-except block)
+        confounds_path = subj_out / "confounds.csv"
+        pd.DataFrame(result["confound_regressors"]).to_csv(confounds_path, index=False)
 
-            return {
-                "status": "success",
-                "subject_id": subject_id,
-                "site": site_name,
-                "output_dir": str(subj_out),
-                "files_verified": True,
-                "func_size_mb": func_output_path.stat().st_size / (1024*1024),
-                "mask_size_mb": mask_output_path.stat().st_size / (1024*1024),
-                "message": f"Preprocessed {subject_id} successfully"
-            }
-        else:
-            raise RuntimeError(f"Pipeline failed: {result.get('error', 'Unknown error')}")
+        return {
+            "status": "success",
+            "subject_id": subject_id,
+            "site": site_name,
+            "output_dir": str(subj_out),
+            "files_verified": True,
+            "func_size_mb": func_output_path.stat().st_size / (1024*1024),
+            "mask_size_mb": mask_output_path.stat().st_size / (1024*1024),
+            "message": f"Preprocessed {subject_id} successfully"
+        }
 
     except Exception as e:
         error_type = "unknown_error"
