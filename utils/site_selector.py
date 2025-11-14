@@ -30,11 +30,11 @@ class SiteSelector:
     """Manages site selection for different experimental configurations"""
     
     # Site definitions
-    ALL_SITES = ['Brown', 'NYU', 'NeuroIMAGE', 'Peking_1', 'Peking_2', 'Peking_3', 'Pittsburgh', 'WashU']
+    ALL_SITES = ['Brown', 'NYU', 'NeuroIMAGE', 'Peking_1', 'Peking_2', 'Peking_3', 'Pittsburgh', 'WashU', 'KKI', 'OHSU']
     
     # Baseline-comparable configuration
-    # Using largest/most reliable sites as proxy for baseline study's site selection
-    BASELINE_SITES = ['NYU', 'Peking_1', 'Peking_2', 'Peking_3', 'NeuroIMAGE']
+    # Matches baseline study: NYU, Peking (1+2+3), OHSU, KKI, NI (NeuroIMAGE)
+    BASELINE_SITES = ['NYU', 'Peking_1', 'Peking_2', 'Peking_3', 'NeuroIMAGE', 'KKI', 'OHSU']
     
     # Alternative: use only sites with sufficient samples (>50 subjects)
     LARGE_SITES = ['NYU', 'Pittsburgh', 'NeuroIMAGE']

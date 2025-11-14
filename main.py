@@ -395,7 +395,7 @@ def _extract_features_worker_wrapper(row_dict):
     # Call the actual worker function
     return extract_features_worker(row_dict, preproc_dir, feature_out_dir, atlas_labels, parcellation_path)
 
-def run_roi_ranking(feature_manifest: Path, output_dir: Path, max_rois: int = 50):
+def run_roi_ranking(feature_manifest: Path, output_dir: Path, max_rois: int = 15):
     """
     Run ROI-ranking feature selection pipeline
     
@@ -661,8 +661,8 @@ if __name__ == "__main__":
                        help="Site selection: 'all' (8 sites), 'baseline' (5 sites), 'both' (run both experiments)")
     parser.add_argument("--skip-roi-ranking", action="store_true",
                        help="Skip ROI-ranking feature selection (use all 200 ROIs)")
-    parser.add_argument("--max-rois", type=int, default=50,
-                       help="Maximum number of ROIs to test in incremental evaluation (default: 50)")
+    parser.add_argument("--max-rois", type=int, default=15,
+                       help="Maximum number of ROIs to test in incremental evaluation (default: 15)")
     args = parser.parse_args()
 
     # Device configuration based on args
@@ -745,8 +745,19 @@ if __name__ == "__main__":
         # ROI-Ranking: Identify optimal ROI subset
         training_manifest = FEATURE_MANIFEST
         if args.stage == "roi-ranking" or (args.stage == "full" and not args.skip_roi_ranking):
+            # Determine which manifest to use for ROI-ranking based on site_config
+            if args.site_config == "baseline" and site_configs.get('baseline'):
+                roi_input_manifest = site_configs['baseline']
+                print("\n🎯 Running ROI-ranking on BASELINE sites (NYU, Peking_1/2/3, NeuroIMAGE)")
+            elif args.site_config == "all" and site_configs.get('all_sites'):
+                roi_input_manifest = site_configs['all_sites']
+                print("\n🎯 Running ROI-ranking on ALL 8 sites")
+            else:
+                roi_input_manifest = FEATURE_MANIFEST
+                print("\n🎯 Running ROI-ranking on full dataset")
+            
             roi_ranking_results = run_roi_ranking(
-                feature_manifest=FEATURE_MANIFEST,
+                feature_manifest=roi_input_manifest,
                 output_dir=ROI_RANKING_DIR,
                 max_rois=args.max_rois
             )
