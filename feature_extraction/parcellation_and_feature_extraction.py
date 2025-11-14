@@ -147,6 +147,14 @@ def extract_features_worker(row, preproc_dir: Path, feature_out_dir: Path, atlas
         site_feature_dir = feature_out_dir / site
         site_feature_dir.mkdir(parents=True, exist_ok=True)
 
+        # ✅ SKIP IF FEATURES ALREADY EXIST
+        timeseries_file = site_feature_dir / f"{subject_id}_roi_timeseries.csv"
+        connectivity_file = site_feature_dir / f"{subject_id}_connectivity_matrix.npy"
+        
+        if timeseries_file.exists() and connectivity_file.exists():
+            # Features already extracted, skip silently
+            return {"subject_id": subject_id, "site": site, "status": "skipped"}
+
         # ✅ COMPREHENSIVE FILE CORRUPTION DETECTION
         def validate_gzipped_nifti(file_path: Path) -> dict:
             """Comprehensive validation of gzipped NIfTI files"""
@@ -470,7 +478,14 @@ def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame) -> Pa
     manifest_data = []
     missing_count = 0
     
-    for _, row in metadata.iterrows():
+    # Get unique subjects only (remove duplicate runs)
+    unique_subjects = metadata.drop_duplicates(subset=['subject_id']).copy()
+    
+    print(f"\n📋 Creating feature manifest...")
+    print(f"   Total metadata entries: {len(metadata)}")
+    print(f"   Unique subjects: {len(unique_subjects)}")
+    
+    for _, row in unique_subjects.iterrows():
         subject_id = row['subject_id']
         site = row.get('site', row.get('dataset', 'unknown'))
         
@@ -501,7 +516,7 @@ def create_feature_manifest(feature_out_dir: Path, metadata: pd.DataFrame) -> Pa
     
     print(f"\nFeature Manifest Summary:")
     print(f"  ✅ Complete features: {len(manifest_df)} subjects")
-    print(f"  ❌ Missing features: {missing_count} subjects")  # Less verbose
+    print(f"  ❌ Missing features: {missing_count} subjects")
     print(f"  Sites: {manifest_df['site'].nunique()}")
     if 'diagnosis' in manifest_df.columns:
         print(f"  Controls: {(manifest_df['diagnosis'] == 0).sum()}")

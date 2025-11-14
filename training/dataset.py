@@ -21,38 +21,53 @@ class ADHDDataset(Dataset):
     def __getitem__(self, idx):
         row = self.data.iloc[idx]
         
-        # Load FC matrix
-        fc_path = Path(row['fc_path'])
-        if fc_path.suffix == '.npy':
-            fc_matrix = np.load(fc_path).astype(np.float32)
-        else:
-            fc_matrix = pd.read_csv(fc_path, header=None).values.astype(np.float32)
-        
-        # Load time series
-        ts_path = Path(row['ts_path'])
-        if ts_path.suffix == '.npy':
-            timeseries = np.load(ts_path).astype(np.float32)
-        else:
-            # Try loading with header first, then without if it fails
-            try:
-                timeseries = pd.read_csv(ts_path).values.astype(np.float32)
-            except:
-                timeseries = pd.read_csv(ts_path, header=None).values.astype(np.float32)
-        
-        # Get label
-        label = int(row['diagnosis'])  # 0 for control, 1 for ADHD
-        
-        # Ensure proper shapes and types
-        fc_matrix = torch.from_numpy(fc_matrix).float()
-        timeseries = torch.from_numpy(timeseries).float()
-        
-        return {
-            'fc_matrix': fc_matrix,
-            'timeseries': timeseries,
-            'label': torch.tensor(label, dtype=torch.long),
-            'subject_id': row['subject_id'],
-            'site': row.get('site', 'unknown')
-        }
+        try:
+            # Load FC matrix
+            fc_path = Path(row['fc_path'])
+            if fc_path.suffix == '.npy':
+                fc_matrix = np.load(fc_path, allow_pickle=False).astype(np.float32)
+            else:
+                fc_matrix = pd.read_csv(fc_path, header=None).apply(pd.to_numeric, errors='coerce').values.astype(np.float32)
+                if np.any(np.isnan(fc_matrix)):
+                    fc_matrix = np.nan_to_num(fc_matrix, nan=0.0)
+            
+            # Load time series
+            ts_path = Path(row['ts_path'])
+            if ts_path.suffix == '.npy':
+                timeseries = np.load(ts_path, allow_pickle=False).astype(np.float32)
+            else:
+                # Load CSV and convert to numeric, handling any object columns
+                ts_df = pd.read_csv(ts_path)
+                # Convert all columns to numeric, coercing errors to NaN
+                timeseries = ts_df.apply(pd.to_numeric, errors='coerce').values.astype(np.float32)
+                
+                # Check for NaN values and replace with 0
+                if np.any(np.isnan(timeseries)):
+                    timeseries = np.nan_to_num(timeseries, nan=0.0)
+            
+            # Get label
+            label = int(row['diagnosis'])  # 0 for control, 1 for ADHD
+            
+            # Ensure proper shapes and types
+            fc_matrix = torch.from_numpy(fc_matrix.astype(np.float32)).float()
+            timeseries = torch.from_numpy(timeseries.astype(np.float32)).float()
+            
+            # Validate shapes
+            if fc_matrix.dim() != 2 or fc_matrix.shape[0] != fc_matrix.shape[1]:
+                raise ValueError(f"Invalid FC matrix shape: {fc_matrix.shape}, expected square matrix")
+            if timeseries.dim() != 2:
+                raise ValueError(f"Invalid timeseries shape: {timeseries.shape}, expected 2D array (timepoints, ROIs)")
+            
+            return {
+                'fc_matrix': fc_matrix,
+                'timeseries': timeseries,
+                'label': torch.tensor(label, dtype=torch.long),
+                'subject_id': row['subject_id'],
+                'site': row.get('site', 'unknown')
+            }
+            
+        except Exception as e:
+            raise RuntimeError(f"Error loading data for subject {row['subject_id']}: {str(e)}")
 
 
 def collate_fn(batch):

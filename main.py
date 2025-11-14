@@ -21,10 +21,12 @@ import pandas as pd
 import numpy as np
 from preprocessing import PreprocessingPipeline
 from training import DataSplitter
-from feature_extraction import SchaeferParcellation, run_feature_extraction_stage
+from feature_extraction import SchaeferParcellation, run_feature_extraction_stage, create_feature_manifest
+from feature_extraction.roi_ranking import run_roi_ranking_pipeline
 from preprocessing.preprocess import _process_subject
 from utils import run_parallel
 from utils import DataDiscovery
+from utils.site_selector import create_site_filtered_datasets
 from models import GNNSTANHybrid
 from training import TrainingOptimizationModule
 from evaluation import ADHDModelEvaluator
@@ -39,6 +41,8 @@ METADATA_OUT = RAW_DIR / "subjects_metadata.csv"
 DEMOGRAPHICS = RAW_DIR / "demographics.csv"
 FEATURE_MANIFEST = FEATURES_OUT / "feature_manifest.csv"
 SPLITS_DIR = Path("./data/splits")
+ROI_RANKING_DIR = Path("./data/roi_ranking")
+SITE_CONFIG_DIR = Path("./data/site_configs")
 
 SPLIT_CONFIG = {
     'train_size': 0.8,
@@ -229,15 +233,21 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         # Convert to DataFrame with only preprocessed subjects
         metadata = pd.DataFrame(preprocessed_subjects)
         
-        print(f"\n📊 Preprocessing Status:")
-        print(f"   ✅ Ready for feature extraction: {len(metadata)} subjects")
-        print(f"   ⏭️  Missing preprocessing: {len(missing_preprocessing)} subjects")
+        # ✅ DEDUPLICATE: Keep only one row per subject (for multi-run subjects)
+        metadata_unique = metadata.drop_duplicates(subset=['subject_id'], keep='first')
         
-        if len(metadata) == 0:
+        print(f"\n📊 Preprocessing Status:")
+        print(f"   ✅ Total entries with preprocessing: {len(metadata)}")
+        print(f"   ✅ Unique subjects ready: {len(metadata_unique)} subjects")
+        print(f"   ⏭️  Missing preprocessing: {len(missing_preprocessing)} entries")
+        
+        if len(metadata_unique) == 0:
             print("\n❌ No preprocessed subjects found! Run preprocessing first.")
             return []
         
-        print(f"\n🎯 Will extract features from {len(metadata)} preprocessed subjects")
+        # Use deduplicated metadata for feature extraction
+        metadata = metadata_unique
+        print(f"\n🎯 Will extract features from {len(metadata)} unique subjects")
 
         # Try both possible atlas directory structures
         parcellation_candidates = [
@@ -384,6 +394,60 @@ def _extract_features_worker_wrapper(row_dict):
     
     # Call the actual worker function
     return extract_features_worker(row_dict, preproc_dir, feature_out_dir, atlas_labels, parcellation_path)
+
+def run_roi_ranking(feature_manifest: Path, output_dir: Path, max_rois: int = 50):
+    """
+    Run ROI-ranking feature selection pipeline
+    
+    This implements the methodology from the baseline study:
+    1. Evaluate each ROI individually with LOSO validation
+    2. Rank ROIs by their discriminative power
+    3. Incrementally combine top-ranked ROIs to find optimal subset
+    """
+    print("\n" + "="*70)
+    print("ROI-RANKING FEATURE SELECTION")
+    print("="*70)
+    
+    if not feature_manifest.exists():
+        raise FileNotFoundError(f"Feature manifest not found: {feature_manifest}")
+    
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Run ROI-ranking pipeline
+    results = run_roi_ranking_pipeline(
+        feature_manifest_path=feature_manifest,
+        output_dir=output_dir,
+        n_rois=200,  # Schaefer-200 atlas
+        max_rois_to_test=max_rois,
+        validation_strategy='loso'  # Use LOSO as in baseline study
+    )
+    
+    print(f"\n✅ ROI-ranking complete!")
+    print(f"   Optimal ROI subset: {results['optimal_n_rois']} ROIs")
+    print(f"   Best accuracy: {results['optimal_accuracy']*100:.2f}%")
+    print(f"   Filtered manifest: {results['filtered_manifest_path']}")
+    
+    return results
+
+def run_site_configuration(feature_manifest: Path, metadata_path: Path, output_dir: Path):
+    """
+    Create site-filtered experimental configurations
+    
+    This creates two datasets:
+    1. All 8 sites (759 subjects) - maximum data
+    2. Baseline-comparable (5 sites) - fair comparison with baseline study
+    """
+    print("\n" + "="*70)
+    print("SITE CONFIGURATION")
+    print("="*70)
+    
+    configs = create_site_filtered_datasets(
+        feature_manifest_path=feature_manifest,
+        metadata_path=metadata_path,
+        output_dir=output_dir
+    )
+    
+    return configs
 
 def run_splitting(
     feature_manifest: Path, 
@@ -574,7 +638,7 @@ def print_detailed_error_summary(all_results, stage_name="PROCESSING"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run ADHD GNN-STAN pipeline")
     parser.add_argument("--stage", type=str,
-                       choices=["preprocessing", "features", "split", "training", "full", "retry"],
+                       choices=["preprocessing", "features", "roi-ranking", "split", "training", "full", "retry"],
                        default="full",
                        help="Which stage of the pipeline to run")
     parser.add_argument("--parallel", action="store_true", default=True,
@@ -591,6 +655,14 @@ if __name__ == "__main__":
                        help="Cleanup corrupted files before retry (default: True)")
     parser.add_argument("--no-retry-cleanup", action="store_false", dest="retry_cleanup",
                        help="Don't cleanup corrupted files before retry")
+    parser.add_argument("--site-config", type=str,
+                       choices=["all", "baseline", "both"],
+                       default="both",
+                       help="Site selection: 'all' (8 sites), 'baseline' (5 sites), 'both' (run both experiments)")
+    parser.add_argument("--skip-roi-ranking", action="store_true",
+                       help="Skip ROI-ranking feature selection (use all 200 ROIs)")
+    parser.add_argument("--max-rois", type=int, default=50,
+                       help="Maximum number of ROIs to test in incremental evaluation (default: 50)")
     args = parser.parse_args()
 
     # Device configuration based on args
@@ -601,7 +673,7 @@ if __name__ == "__main__":
         print(f"Using device: {DEVICE}")
 
     # Create necessary directories
-    for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR]:
+    for dir_path in [PREPROC_OUT, FEATURES_OUT, TRAINED_OUT, SPLITS_DIR, ROI_RANKING_DIR, SITE_CONFIG_DIR]:
         dir_path.mkdir(parents=True, exist_ok=True)
 
     # Ensure metadata exists
@@ -633,11 +705,11 @@ if __name__ == "__main__":
         # If a feature manifest already exists, treat "full" as skipping preprocessing+feature extraction.
         manifest_exists = FEATURE_MANIFEST.exists()
 
-        # Preprocessing: run if explicitly requested, or if "full" and no manifest exists
-        if args.stage == "preprocessing" or (args.stage == "full" and not manifest_exists):
+        # Preprocessing: ONLY run if explicitly requested (never run during "full")
+        if args.stage == "preprocessing":
             run_preprocessing(METADATA_OUT, PREPROC_OUT, parallel=args.parallel, device=DEVICE)
-        else:
-            print("Skipping preprocessing (feature manifest found). To force, run --stage preprocessing or delete the manifest.")
+        elif args.stage == "full":
+            print("Skipping preprocessing (already complete). Preprocessing is now only run with --stage preprocessing.")
 
         # Feature extraction: run if explicitly requested, or if "full" and not manifest_exists
         if args.stage == "features" or (args.stage == "full" and not manifest_exists):
@@ -650,19 +722,97 @@ if __name__ == "__main__":
         else:
             print("Skipping feature extraction (feature manifest found). To force, run --stage features or delete the manifest.")
 
-        if args.stage in ["split", "training", "full"]:
-            splits = run_splitting(FEATURE_MANIFEST, SPLITS_DIR, SPLIT_CONFIG)
-
-        if args.stage in ["training", "full"]:
-            run_training(
+        # Site Configuration: Create filtered datasets for different experiments
+        site_configs = {}
+        if args.stage in ["roi-ranking", "split", "training", "full"]:
+            if args.site_config in ["all", "both"]:
+                print("\n" + "="*70)
+                print("Experiment 1: ALL 8 SITES (759 subjects)")
+                print("="*70)
+                
+            if args.site_config in ["baseline", "both"]:
+                print("\n" + "="*70)
+                print("Experiment 2: BASELINE-COMPARABLE (5 sites)")
+                print("="*70)
+                
+            # Create site configurations
+            site_configs = run_site_configuration(
                 feature_manifest=FEATURE_MANIFEST,
-                demographics=DEMOGRAPHICS,
-                model_config=MODEL_CONFIG,
-                training_config=TRAINING_CONFIG,
-                splits_path=SPLITS_DIR / "splits.json",
-                device=DEVICE
+                metadata_path=METADATA_OUT,
+                output_dir=SITE_CONFIG_DIR
             )
+        
+        # ROI-Ranking: Identify optimal ROI subset
+        training_manifest = FEATURE_MANIFEST
+        if args.stage == "roi-ranking" or (args.stage == "full" and not args.skip_roi_ranking):
+            roi_ranking_results = run_roi_ranking(
+                feature_manifest=FEATURE_MANIFEST,
+                output_dir=ROI_RANKING_DIR,
+                max_rois=args.max_rois
+            )
+            
+            # Use filtered manifest for training
+            training_manifest = Path(roi_ranking_results['filtered_manifest_path'])
+        else:
+            # Use full manifest (all 200 ROIs)
+            if args.skip_roi_ranking:
+                print("\nSkipping ROI-ranking (using all 200 ROIs)")
+
+        # Data Splitting
+        all_splits = {}
+        if args.stage in ["split", "training", "full"]:
+            # Determine which manifests to use based on site configuration
+            manifests_to_split = []
+            
+            if args.site_config == "all":
+                manifests_to_split.append(("all_sites", site_configs.get('all_sites', training_manifest)))
+            elif args.site_config == "baseline":
+                manifests_to_split.append(("baseline", site_configs.get('baseline', training_manifest)))
+            else:  # both
+                manifests_to_split.append(("all_sites", site_configs.get('all_sites', training_manifest)))
+                manifests_to_split.append(("baseline", site_configs.get('baseline', training_manifest)))
+            
+            # Create splits for each configuration
+            all_splits = {}
+            for config_name, manifest_path in manifests_to_split:
+                print(f"\n📊 Creating splits for {config_name} configuration...")
+                config_splits_dir = SPLITS_DIR / config_name
+                config_splits_dir.mkdir(parents=True, exist_ok=True)
+                
+                splits = run_splitting(manifest_path, config_splits_dir, SPLIT_CONFIG)
+                all_splits[config_name] = {
+                    'splits': splits,
+                    'manifest': manifest_path,
+                    'splits_dir': config_splits_dir
+                }
+
+        # Training
+        if args.stage in ["training", "full"]:
+            # Train on each configuration
+            for config_name, config_data in all_splits.items():
+                print("\n" + "="*70)
+                print(f"TRAINING: {config_name.upper()} CONFIGURATION")
+                print("="*70)
+                
+                # Create config-specific output directory
+                config_output_dir = TRAINED_OUT / config_name
+                config_training_config = TRAINING_CONFIG.copy()
+                config_training_config['output_dir'] = str(config_output_dir / "checkpoints")
+                
+                run_training(
+                    feature_manifest=config_data['manifest'],
+                    demographics=DEMOGRAPHICS,
+                    model_config=MODEL_CONFIG,
+                    training_config=config_training_config,
+                    splits_path=config_data['splits_dir'] / "splits.json",
+                    device=DEVICE
+                )
+                
+                print(f"\n✅ Training complete for {config_name} configuration")
+                print(f"   Results saved to: {config_output_dir}")
 
     except Exception as e:
         print(f"Pipeline failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
