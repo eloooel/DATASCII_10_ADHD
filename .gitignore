@@ -51,3 +51,6 @@ data/raw/
 # Outputs
 outputs/*/
 !outputs/*/README.md
+
+# Papers and documentation
+base study.txt
