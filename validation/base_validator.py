@@ -70,7 +70,6 @@ class BaseValidator(ABC):
         all_predictions = []
         all_probabilities = []
         all_labels = []
-        all_embeddings = {'gnn': [], 'stan': [], 'fused': []}
         
         with torch.no_grad():
             for batch in test_loader:
@@ -79,25 +78,20 @@ class BaseValidator(ABC):
                         for k, v in batch.items()}
                 
                 # Forward pass
-                outputs = model(
+                logits = model(
                     batch['fc_matrix'],
-                    batch['roi_timeseries'],
-                    batch['edge_index'],
-                    batch['batch']
+                    batch['roi_timeseries']
                 )
                 
-                # Collect predictions and embeddings
-                _, predicted = torch.max(outputs['logits'], 1)
-                probabilities = torch.softmax(outputs['logits'], dim=1)
+                # Get probabilities
+                probabilities = torch.softmax(logits, dim=1)
+                
+                # Collect predictions (using argmax - no threshold adjustment)
+                _, predicted = torch.max(logits, 1)
                 
                 all_predictions.extend(predicted.cpu().numpy())
                 all_probabilities.extend(probabilities.cpu().numpy())
                 all_labels.extend(batch['label'].cpu().numpy())
-                
-                # Store embeddings for analysis
-                all_embeddings['gnn'].extend(outputs['gnn_embedding'].cpu().numpy())
-                all_embeddings['stan'].extend(outputs['stan_embedding'].cpu().numpy())
-                all_embeddings['fused'].extend(outputs['fused_embedding'].cpu().numpy())
         
         # Convert to numpy arrays
         predictions = np.array(all_predictions)
@@ -106,13 +100,6 @@ class BaseValidator(ABC):
         
         # Compute comprehensive metrics
         metrics = self._compute_metrics(true_labels, predictions, probabilities)
-        
-        # Add embeddings to results
-        metrics['embeddings'] = {
-            'gnn': np.array(all_embeddings['gnn']),
-            'stan': np.array(all_embeddings['stan']),
-            'fused': np.array(all_embeddings['fused'])
-        }
         
         return metrics
     
@@ -126,11 +113,18 @@ class BaseValidator(ABC):
             true_labels, predictions, average='binary', zero_division=0
         )
         
-        # ROC-AUC
+        # ROC-AUC with comprehensive error handling
         try:
-            auc = roc_auc_score(true_labels, probabilities[:, 1])
-        except ValueError:
-            auc = 0.5  # Default for edge cases
+            # Check if both classes are present in true labels
+            unique_labels = np.unique(true_labels)
+            if len(unique_labels) < 2:
+                # Only one class present - cannot compute AUC meaningfully
+                auc = np.nan
+            else:
+                auc = roc_auc_score(true_labels, probabilities[:, 1])
+        except (ValueError, IndexError) as e:
+            # Edge case: prediction issues
+            auc = np.nan
         
         # Confusion matrix and derived metrics
         cm = confusion_matrix(true_labels, predictions)
@@ -193,17 +187,28 @@ class BaseValidator(ABC):
                      if 'test_metrics' in fold and metric in fold['test_metrics']]
             
             if values:
-                mean_val = np.mean(values)
-                std_val = np.std(values)
+                # Filter out NaN values for proper statistics
+                valid_values = [v for v in values if not np.isnan(v)]
                 
-                # 95% confidence interval
-                ci_lower, ci_upper = self._compute_confidence_interval(values)
-                
-                aggregated[f'{metric}_mean'] = float(mean_val)
-                aggregated[f'{metric}_std'] = float(std_val)
-                aggregated[f'{metric}_ci_lower'] = float(ci_lower)
-                aggregated[f'{metric}_ci_upper'] = float(ci_upper)
-                aggregated[f'{metric}_values'] = [float(v) for v in values]
+                if valid_values:
+                    mean_val = np.mean(valid_values)
+                    std_val = np.std(valid_values)
+                    
+                    # 95% confidence interval
+                    ci_lower, ci_upper = self._compute_confidence_interval(valid_values)
+                    
+                    aggregated[f'{metric}_mean'] = float(mean_val)
+                    aggregated[f'{metric}_std'] = float(std_val)
+                    aggregated[f'{metric}_ci_lower'] = float(ci_lower)
+                    aggregated[f'{metric}_ci_upper'] = float(ci_upper)
+                    aggregated[f'{metric}_values'] = [float(v) for v in values]  # Keep original including NaN
+                else:
+                    # All values are NaN
+                    aggregated[f'{metric}_mean'] = np.nan
+                    aggregated[f'{metric}_std'] = np.nan
+                    aggregated[f'{metric}_ci_lower'] = np.nan
+                    aggregated[f'{metric}_ci_upper'] = np.nan
+                    aggregated[f'{metric}_values'] = [float(v) for v in values]
         
         # Overall statistics
         aggregated['n_folds'] = len(fold_results)

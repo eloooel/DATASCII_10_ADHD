@@ -17,8 +17,9 @@ import time
 from tqdm import tqdm
 
 from .base_validator import BaseValidator
-from ..models import GNNSTANHybrid
-from ..training.train import ADHDDataset, FocalLoss, EarlyStopping
+from models import GNNSTANHybrid
+from training.dataset import ADHDDataset
+from optimization import FocalLoss, EarlyStopping
 
 
 class LeaveOneSiteOutValidator(BaseValidator):
@@ -138,21 +139,27 @@ class LeaveOneSiteOutValidator(BaseValidator):
         
         # Create datasets
         train_dataset = ADHDDataset(
-            fc_matrices[train_idx], roi_timeseries[train_idx],
-            labels[train_idx], sites[train_idx], augment=True
+            fc_matrices=fc_matrices[train_idx],
+            roi_timeseries=roi_timeseries[train_idx],
+            labels=labels[train_idx],
+            sites=sites[train_idx],
+            augment=True
         )
         
         test_dataset = ADHDDataset(
-            fc_matrices[test_idx], roi_timeseries[test_idx],
-            labels[test_idx], sites[test_idx], augment=False
+            fc_matrices=fc_matrices[test_idx],
+            roi_timeseries=roi_timeseries[test_idx],
+            labels=labels[test_idx],
+            sites=sites[test_idx],
+            augment=False
         )
         
         # Create data loaders
         train_loader = self._create_train_loader(train_dataset, labels[train_idx])
         test_loader = self._create_test_loader(test_dataset)
         
-        # Initialize model
-        model = GNNSTANHybrid(self.model_config).to(self.device)
+        # Initialize model with unpacked config
+        model = GNNSTANHybrid(**self.model_config).to(self.device)
         
         # Setup training components
         optimizer = self._setup_optimizer(model)
@@ -194,8 +201,8 @@ class LeaveOneSiteOutValidator(BaseValidator):
                     'LR': f"{optimizer.param_groups[0]['lr']:.2e}"
                 })
                 
-                # Early stopping
-                if early_stopping(val_metrics['accuracy'], model):
+                # Early stopping (based on validation loss)
+                if early_stopping(val_metrics['loss']):
                     self.logger.info(f"Early stopping at epoch {epoch + 1}")
                     break
         
@@ -225,10 +232,14 @@ class LeaveOneSiteOutValidator(BaseValidator):
         class_weights = 1.0 / class_counts
         sample_weights = class_weights[labels]
         
+        # Calculate number of samples per epoch
+        # Use the original dataset size to ensure we see all data once per epoch
+        num_samples_per_epoch = len(sample_weights)
+        
         sampler = WeightedRandomSampler(
             weights=sample_weights,
-            num_samples=len(sample_weights),
-            replacement=True
+            num_samples=num_samples_per_epoch,
+            replacement=True  # Allow resampling for balance, but limited by num_samples
         )
         
         return DataLoader(
@@ -236,7 +247,7 @@ class LeaveOneSiteOutValidator(BaseValidator):
             batch_size=self.training_config.get('batch_size', 16),
             sampler=sampler,
             collate_fn=self._collate_batch,
-            num_workers=self.training_config.get('num_workers', 4),
+            num_workers=0,  # Set to 0 to avoid multiprocessing issues on Windows
             pin_memory=True
         )
     
@@ -248,7 +259,7 @@ class LeaveOneSiteOutValidator(BaseValidator):
             batch_size=self.training_config.get('batch_size', 16),
             shuffle=False,
             collate_fn=self._collate_batch,
-            num_workers=self.training_config.get('num_workers', 4),
+            num_workers=0,  # Set to 0 to avoid multiprocessing issues on Windows
             pin_memory=True
         )
     
@@ -261,39 +272,12 @@ class LeaveOneSiteOutValidator(BaseValidator):
         labels = torch.stack([item['label'] for item in batch_list])
         sites = [item['site'] for item in batch_list]
         
-        # Create batch indices for graph pooling
-        batch_indices = []
-        edge_indices = []
-        edge_weights = []
-        
-        for i, item in enumerate(batch_list):
-            edge_index = item['edge_index']
-            edge_weight = item['edge_weights']
-            
-            # Add batch offset to edge indices
-            edge_index_offset = edge_index + i * fc_matrices.shape[1]  # n_rois offset
-            edge_indices.append(edge_index_offset)
-            edge_weights.append(edge_weight)
-            
-            # Create batch indices (which graph each node belongs to)
-            batch_indices.extend([i] * fc_matrices.shape[1])  # n_rois per graph
-        
-        # Concatenate all edges
-        if edge_indices:
-            all_edge_indices = torch.cat(edge_indices, dim=1)
-            all_edge_weights = torch.cat(edge_weights)
-        else:
-            all_edge_indices = torch.empty((2, 0), dtype=torch.long)
-            all_edge_weights = torch.empty(0)
-        
-        batch_tensor = torch.tensor(batch_indices, dtype=torch.long)
+        # Note: Edge indices and batch indices are created by the model's forward pass
+        # The model handles graph construction internally for efficiency
         
         return {
             'fc_matrix': fc_matrices,
             'roi_timeseries': roi_timeseries,
-            'edge_index': all_edge_indices,
-            'edge_weights': all_edge_weights,
-            'batch': batch_tensor,
             'label': labels,
             'sites': sites
         }
@@ -318,8 +302,7 @@ class LeaveOneSiteOutValidator(BaseValidator):
                 optimizer,
                 mode='min',
                 factor=0.5,
-                patience=10,
-                verbose=False
+                patience=10
             )
         return None
     
@@ -331,7 +314,9 @@ class LeaveOneSiteOutValidator(BaseValidator):
                 gamma=self.training_config.get('focal_gamma', 2.0)
             )
         else:
-            return nn.CrossEntropyLoss()
+            # Use label smoothing to prevent overconfident predictions
+            label_smoothing = self.training_config.get('label_smoothing', 0.1)
+            return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     
     def _train_epoch(self, model: nn.Module, train_loader: DataLoader, 
                     criterion: nn.Module, optimizer) -> Dict[str, float]:
@@ -347,15 +332,13 @@ class LeaveOneSiteOutValidator(BaseValidator):
             batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
             
             # Forward pass
-            outputs = model(
+            logits = model(
                 batch['fc_matrix'],
-                batch['roi_timeseries'],
-                batch['edge_index'],
-                batch['batch']
+                batch['roi_timeseries']
             )
             
             # Compute loss
-            loss = criterion(outputs['logits'], batch['label'])
+            loss = criterion(logits, batch['label'])
             
             # Backward pass
             optimizer.zero_grad()
@@ -368,7 +351,7 @@ class LeaveOneSiteOutValidator(BaseValidator):
             
             # Statistics
             total_loss += loss.item()
-            _, predicted = torch.max(outputs['logits'].data, 1)
+            _, predicted = torch.max(logits.data, 1)
             total += batch['label'].size(0)
             correct += (predicted == batch['label']).sum().item()
         
@@ -392,19 +375,17 @@ class LeaveOneSiteOutValidator(BaseValidator):
                 batch = {k: v.to(self.device) if torch.is_tensor(v) else v for k, v in batch.items()}
                 
                 # Forward pass
-                outputs = model(
+                logits = model(
                     batch['fc_matrix'],
-                    batch['roi_timeseries'],
-                    batch['edge_index'],
-                    batch['batch']
+                    batch['roi_timeseries']
                 )
                 
                 # Compute loss
-                loss = criterion(outputs['logits'], batch['label'])
+                loss = criterion(logits, batch['label'])
                 
                 # Statistics
                 total_loss += loss.item()
-                _, predicted = torch.max(outputs['logits'].data, 1)
+                _, predicted = torch.max(logits.data, 1)
                 total += batch['label'].size(0)
                 correct += (predicted == batch['label']).sum().item()
         

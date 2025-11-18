@@ -14,8 +14,9 @@ import time
 from tqdm import tqdm
 
 from .base_validator import BaseValidator
-from ..models import GNNSTANHybrid
-from ..training.train import ADHDDataset, FocalLoss, EarlyStopping
+from models import GNNSTANHybrid
+from training.dataset import ADHDDataset
+from optimization import FocalLoss, EarlyStopping
 
 
 class KFoldValidator(BaseValidator):
@@ -115,13 +116,19 @@ class KFoldValidator(BaseValidator):
         
         # Create datasets
         train_dataset = ADHDDataset(
-            fc_matrices[train_idx], roi_timeseries[train_idx],
-            labels[train_idx], sites[train_idx], augment=True
+            fc_matrices=fc_matrices[train_idx],
+            roi_timeseries=roi_timeseries[train_idx],
+            labels=labels[train_idx],
+            sites=sites[train_idx],
+            augment=True
         )
         
         test_dataset = ADHDDataset(
-            fc_matrices[test_idx], roi_timeseries[test_idx],
-            labels[test_idx], sites[test_idx], augment=False
+            fc_matrices=fc_matrices[test_idx],
+            roi_timeseries=roi_timeseries[test_idx],
+            labels=labels[test_idx],
+            sites=sites[test_idx],
+            augment=False
         )
         
         # Create data loaders
@@ -129,7 +136,7 @@ class KFoldValidator(BaseValidator):
         test_loader = self._create_data_loader(test_dataset, is_train=False)
         
         # Initialize and train model
-        model = GNNSTANHybrid(self.model_config).to(self.device)
+        model = GNNSTANHybrid(**self.model_config).to(self.device)
         training_history = self._train_model(model, train_loader, test_loader, fold_idx)
         
         # Final evaluation

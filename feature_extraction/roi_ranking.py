@@ -137,8 +137,8 @@ class ROIRankingSelector:
         rankings_df.head(50).to_csv(top_50_path, index=False)
         
         print(f"\n✅ ROI rankings saved to: {rankings_path}")
-        print(f"\nTop 10 ROIs:")
-        print(rankings_df.head(10)[['rank', 'roi_name', 'accuracy']].to_string(index=False))
+        print(f"\nTop 15 ROIs:")
+        print(rankings_df.head(15)[['rank', 'roi_name', 'accuracy']].to_string(index=False))
         
         self.roi_rankings = rankings_df
         return rankings_df

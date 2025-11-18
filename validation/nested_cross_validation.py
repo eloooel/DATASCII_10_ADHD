@@ -1,3 +1,12 @@
+import numpy as np
+import torch
+from sklearn.model_selection import ParameterGrid
+from typing import Dict, List, Any
+from .base_validator import BaseValidator
+from .loso import LeaveOneSiteOutValidator
+from .kfold import StratifiedKFoldValidator
+
+
 class NestedCrossValidator(BaseValidator):
     """Nested Cross-Validation with hyperparameter optimization"""
 
@@ -69,7 +78,13 @@ class NestedCrossValidator(BaseValidator):
             # Evaluate on outer test set
             final_model = GNNSTANHybrid(model_config_final).to(self.device)
             test_loader = final_validator._create_data_loader(
-                ADHDDataset(X_test_fc, X_test_ts, y_test, sites_test, augment=False),
+                ADHDDataset(
+                    fc_matrices=X_test_fc,
+                    roi_timeseries=X_test_ts,
+                    labels=y_test,
+                    sites=sites_test,
+                    augment=False
+                ),
                 is_train=False
             )
             test_metrics = final_validator.evaluate_model(final_model, test_loader)

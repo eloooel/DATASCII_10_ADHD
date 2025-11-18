@@ -8,17 +8,65 @@ from pathlib import Path
 class ADHDDataset(Dataset):
     """Dataset for ADHD classification with FC matrices and time series"""
     
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data=None, fc_matrices=None, roi_timeseries=None, labels=None, sites=None, augment=False):
         """
+        Two modes:
+        1. DataFrame mode: Pass data as DataFrame with columns: subject_id, site, fc_path, ts_path, diagnosis
+        2. Array mode: Pass fc_matrices, roi_timeseries, labels, sites as numpy arrays (for validation)
+        
         Args:
             data: DataFrame with columns: subject_id, site, fc_path, ts_path, diagnosis
+            fc_matrices: (n_samples, n_rois, n_rois) numpy array
+            roi_timeseries: (n_samples, n_rois, n_timepoints) numpy array
+            labels: (n_samples,) numpy array
+            sites: (n_samples,) numpy array
+            augment: Whether to apply data augmentation (only for array mode)
         """
-        self.data = data.reset_index(drop=True)
+        if data is not None:
+            # DataFrame mode - original behavior
+            self.mode = 'dataframe'
+            self.data = data.reset_index(drop=True)
+            self.augment = False
+        elif fc_matrices is not None:
+            # Array mode - for validation
+            self.mode = 'array'
+            self.fc_matrices = fc_matrices
+            self.roi_timeseries = roi_timeseries
+            self.labels = labels
+            self.sites = sites
+            self.augment = augment
+        else:
+            raise ValueError("Either 'data' DataFrame or array inputs must be provided")
         
     def __len__(self):
-        return len(self.data)
+        if self.mode == 'dataframe':
+            return len(self.data)
+        else:
+            return len(self.fc_matrices)
     
     def __getitem__(self, idx):
+        if self.mode == 'array':
+            # Array mode - direct access
+            fc_matrix = torch.from_numpy(self.fc_matrices[idx].astype(np.float32)).float()
+            roi_timeseries = torch.from_numpy(self.roi_timeseries[idx].astype(np.float32)).float()
+            label = torch.tensor(int(self.labels[idx]), dtype=torch.long)
+            
+            # Simple augmentation if enabled (add small noise)
+            if self.augment:
+                fc_matrix = fc_matrix + torch.randn_like(fc_matrix) * 0.01
+                roi_timeseries = roi_timeseries + torch.randn_like(roi_timeseries) * 0.01
+            
+            # Note: Edge indices are created by the model's forward pass, not here
+            # This avoids expensive computation during data loading
+            
+            return {
+                'fc_matrix': fc_matrix,
+                'roi_timeseries': roi_timeseries,
+                'label': label,
+                'site': self.sites[idx] if self.sites is not None else 'unknown'
+            }
+        
+        # DataFrame mode - original behavior
         row = self.data.iloc[idx]
         
         try:
@@ -50,17 +98,20 @@ class ADHDDataset(Dataset):
             
             # Ensure proper shapes and types
             fc_matrix = torch.from_numpy(fc_matrix.astype(np.float32)).float()
-            timeseries = torch.from_numpy(timeseries.astype(np.float32)).float()
+            roi_timeseries = torch.from_numpy(timeseries.astype(np.float32)).float()
             
             # Validate shapes
             if fc_matrix.dim() != 2 or fc_matrix.shape[0] != fc_matrix.shape[1]:
                 raise ValueError(f"Invalid FC matrix shape: {fc_matrix.shape}, expected square matrix")
-            if timeseries.dim() != 2:
-                raise ValueError(f"Invalid timeseries shape: {timeseries.shape}, expected 2D array (timepoints, ROIs)")
+            if roi_timeseries.dim() != 2:
+                raise ValueError(f"Invalid timeseries shape: {roi_timeseries.shape}, expected 2D array (timepoints, ROIs)")
+            
+            # Note: Edge indices are created by the model's forward pass, not here
+            # This avoids expensive computation during data loading
             
             return {
                 'fc_matrix': fc_matrix,
-                'timeseries': timeseries,
+                'roi_timeseries': roi_timeseries,
                 'label': torch.tensor(label, dtype=torch.long),
                 'subject_id': row['subject_id'],
                 'site': row.get('site', 'unknown')

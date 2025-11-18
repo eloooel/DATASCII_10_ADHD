@@ -5,12 +5,15 @@ Data Loader for ADHD Preprocessing Pipeline
 - Handles discovery of rs-fMRI data from hierarchical structure: data/(dataset)/(subject)/func/*.nii[.gz]
 - Provides subject metadata for downstream preprocessing
 - Saves metadata CSV for reference
+- Utilities for loading features and labels for training
 """
 
 import sys
 import pandas as pd
+import numpy as np
+import torch
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 class DataDiscovery:
     """Simple data discovery for ADHD-200 datasets"""
@@ -289,6 +292,172 @@ def load_metadata(manifest_path: Path) -> List[Dict[str, Any]]:
     """Load a previously saved metadata CSV"""
     df = pd.read_csv(manifest_path)
     return df.to_dict(orient='records')
+
+
+def load_features_and_labels(
+    manifest_df: pd.DataFrame,
+    roi_indices: Optional[List[int]] = None
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load functional connectivity matrices and ROI time series from feature manifest
+    
+    Args:
+        manifest_df: DataFrame with columns [subject_id, site, diagnosis, fc_path, ts_path]
+        roi_indices: Optional list of ROI indices to select (for ROI ranking)
+        
+    Returns:
+        fc_matrices: (n_subjects, n_rois, n_rois) or (n_subjects, n_selected_rois, n_selected_rois)
+        roi_timeseries: (n_subjects, n_rois, n_timepoints) or (n_subjects, n_selected_rois, n_timepoints)
+        labels: (n_subjects,)
+        sites: (n_subjects,) as string array
+    """
+    
+    n_subjects = len(manifest_df)
+    
+    # Initialize lists to collect data
+    fc_matrices_list = []
+    roi_timeseries_list = []
+    labels_list = []
+    sites_list = []
+    
+    print(f"Loading features for {n_subjects} subjects...")
+    
+    # First pass to determine max timepoints
+    max_timepoints = 0
+    for idx, row in manifest_df.iterrows():
+        ts_path = Path(row['ts_path'])
+        if ts_path.suffix == '.csv':
+            roi_ts = pd.read_csv(ts_path).values
+            max_timepoints = max(max_timepoints, roi_ts.shape[0])
+        else:
+            roi_ts = np.load(ts_path)
+            max_timepoints = max(max_timepoints, roi_ts.shape[-1])
+    
+    print(f"Max timepoints found: {max_timepoints}")
+    
+    # Second pass to load and pad/truncate
+    for idx, row in manifest_df.iterrows():
+        # Load FC matrix
+        fc_path = Path(row['fc_path'])
+        fc_matrix = np.load(fc_path)
+        
+        # Load ROI time series  
+        ts_path = Path(row['ts_path'])
+        # Handle both .npy and .csv formats
+        if ts_path.suffix == '.csv':
+            roi_ts = pd.read_csv(ts_path).values.T  # Transpose to (n_rois, n_timepoints)
+        else:
+            roi_ts = np.load(ts_path)
+        
+        # Pad or truncate to max_timepoints
+        n_rois, n_timepoints = roi_ts.shape
+        if n_timepoints < max_timepoints:
+            # Pad with zeros
+            padding = np.zeros((n_rois, max_timepoints - n_timepoints))
+            roi_ts = np.concatenate([roi_ts, padding], axis=1)
+        elif n_timepoints > max_timepoints:
+            # Truncate
+            roi_ts = roi_ts[:, :max_timepoints]
+        
+        # Select ROIs if specified
+        if roi_indices is not None:
+            fc_matrix = fc_matrix[np.ix_(roi_indices, roi_indices)]
+            roi_ts = roi_ts[roi_indices, :]
+        
+        fc_matrices_list.append(fc_matrix)
+        roi_timeseries_list.append(roi_ts)
+        labels_list.append(row['diagnosis'])
+        sites_list.append(row['site'])
+    
+    # Convert to numpy arrays
+    fc_matrices = np.stack(fc_matrices_list, axis=0)
+    roi_timeseries = np.stack(roi_timeseries_list, axis=0)
+    labels = np.array(labels_list)
+    sites = np.array(sites_list)
+    
+    print(f"Loaded shapes:")
+    print(f"  FC matrices: {fc_matrices.shape}")
+    print(f"  ROI timeseries: {roi_timeseries.shape}")
+    print(f"  Labels: {labels.shape}")
+    print(f"  Sites: {sites.shape}")
+    
+    return fc_matrices, roi_timeseries, labels, sites
+
+
+def load_roi_ranking_results(roi_ranking_path: Path, top_k: Optional[int] = None) -> List[int]:
+    """
+    Load ROI ranking results and return top-k ROI indices
+    
+    Args:
+        roi_ranking_path: Path to ROI ranking CSV file
+        top_k: Number of top ROIs to select (if None, uses all)
+        
+    Returns:
+        List of ROI indices (0-indexed)
+    """
+    
+    ranking_df = pd.read_csv(roi_ranking_path)
+    
+    if top_k is not None:
+        ranking_df = ranking_df.head(top_k)
+    
+    # ROI indices are usually in a column like 'roi_id' or 'roi_index'
+    if 'roi_index' in ranking_df.columns:
+        roi_indices = ranking_df['roi_index'].tolist()
+    elif 'roi_id' in ranking_df.columns:
+        roi_indices = ranking_df['roi_id'].tolist()
+    else:
+        # Assume first column is ROI index
+        roi_indices = ranking_df.iloc[:, 0].tolist()
+    
+    return roi_indices
+
+
+def create_dataloaders_from_manifest(
+    manifest_df: pd.DataFrame,
+    batch_size: int = 16,
+    num_workers: int = 4,
+    roi_indices: Optional[List[int]] = None
+) -> torch.utils.data.DataLoader:
+    """
+    Create PyTorch DataLoaders from feature manifest
+    
+    Args:
+        manifest_df: Feature manifest DataFrame
+        batch_size: Batch size for DataLoader
+        num_workers: Number of workers for DataLoader
+        roi_indices: Optional ROI indices to select
+        
+    Returns:
+        DataLoader for the data
+    """
+    
+    from training.dataset import ADHDDataset, collate_fn
+    
+    # Load data
+    fc_matrices, roi_timeseries, labels, sites = load_features_and_labels(
+        manifest_df, roi_indices
+    )
+    
+    # Create dataset
+    dataset = ADHDDataset(
+        fc_matrices=fc_matrices,
+        roi_timeseries=roi_timeseries,
+        labels=labels,
+        sites=sites
+    )
+    
+    # Create dataloader
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        collate_fn=collate_fn,
+        pin_memory=True
+    )
+    
+    return dataloader
 
 
 # Example usage

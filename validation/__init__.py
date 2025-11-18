@@ -11,7 +11,7 @@ Provides different cross-validation strategies:
 from .base_validator import BaseValidator
 from .loso import LeaveOneSiteOutValidator
 from .kfold import KFoldValidator, StratifiedKFoldValidator
-from .nested_cv import NestedCrossValidator
+from .nested_cross_validation import NestedCrossValidator
 
 __all__ = [
     'BaseValidator',
