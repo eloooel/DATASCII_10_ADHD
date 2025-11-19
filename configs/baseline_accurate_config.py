@@ -55,7 +55,7 @@ MODEL_CONFIG_BASELINE = {
 
 TRAINING_CONFIG_BASELINE = {
     # Training Parameters
-    'batch_size': 32,           # Base study used 32 (we had 16)
+    'batch_size': 16,           # Reduced for better balance with small site sizes
     'learning_rate': 0.001,     # Standard Adam learning rate
     'epochs': 100,              # Sufficient for convergence
     'optimizer': 'adam',        # Adam optimizer (standard choice)
@@ -83,9 +83,10 @@ TRAINING_CONFIG_BASELINE = {
     # ROI Selection
     'max_rois': 15,             # Use top-15 ROIs (vs base study's 20)
     
-    # Loss Function - Match base study exactly
-    'use_focal_loss': False,    # Base study used standard binary cross-entropy, NOT focal loss
-    'label_smoothing': 0.1,     # Label smoothing to prevent overconfident single-class predictions
+    # Loss Function - Add class weights to handle 3:1 imbalance
+    'use_focal_loss': False,    # Use standard cross-entropy with class weights
+    'label_smoothing': 0.05,    # Reduced label smoothing (was 0.1)
+    'class_weights': [1.0, 4.0], # Weight minority ADHD class 4x more (more aggressive than 3:1 ratio)
     'focal_alpha': 0.25,        # Not used when use_focal_loss=False
     'focal_gamma': 2.0,         # Not used when use_focal_loss=False
     

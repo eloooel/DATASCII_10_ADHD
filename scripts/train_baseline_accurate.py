@@ -113,10 +113,34 @@ def run_single_training(
     summary_df.to_csv(run_dir / "summary.csv", index=False)
     
     print(f"\n✅ Run {run_id + 1} completed!")
-    print(f"Accuracy: {summary.get('accuracy_mean', summary.get('overall_accuracy', 0)):.4f}")
-    print(f"Sensitivity: {summary.get('sensitivity_mean', summary.get('overall_sensitivity', 0)):.4f}")
-    print(f"Specificity: {summary.get('specificity_mean', summary.get('overall_specificity', 0)):.4f}")
-    print(f"AUC: {summary.get('auc_mean', 0):.4f}")
+    
+    # Display results in base study format
+    print(f"\n{'='*80}")
+    print("RESULTS SUMMARY (Base Study Format)")
+    print(f"{'='*80}")
+    
+    # Per-site accuracy
+    print("\nPer-Site Accuracy:")
+    print(f"{'Site':<15} {'Accuracy':<10} {'Sensitivity':<12} {'Specificity':<12}")
+    print("-" * 55)
+    
+    for fold in results['fold_results']:
+        site = fold['test_site']
+        metrics = fold['test_metrics']
+        print(f"{site:<15} {metrics['accuracy']*100:>6.2f}%    {metrics['sensitivity']*100:>6.2f}%      {metrics['specificity']*100:>6.2f}%")
+    
+    # LOSO Accuracy (mean across folds)
+    loso_acc = summary.get('accuracy_mean', summary.get('overall_accuracy', 0))
+    print(f"\nLOSO Accuracy:    {loso_acc*100:.2f}%")
+    
+    # Overall Accuracy (from aggregated confusion matrix)
+    if 'overall_accuracy' in summary:
+        print(f"Overall Accuracy: {summary['overall_accuracy']*100:.2f}%")
+    
+    print(f"Sensitivity:      {summary.get('sensitivity_mean', summary.get('overall_sensitivity', 0))*100:.2f}%")
+    print(f"Specificity:      {summary.get('specificity_mean', summary.get('overall_specificity', 0))*100:.2f}%")
+    print(f"AUC:              {summary.get('auc_mean', 0):.4f}")
+    print(f"{'='*80}\n")
     
     return summary
 

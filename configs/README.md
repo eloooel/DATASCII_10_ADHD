@@ -112,10 +112,9 @@ To reproduce the baseline study results:
 
 When ready to use the efficient configuration:
 
-1. Uncomment all configurations in `efficient_config.py`
-2. Ensure all 10 sites are preprocessed
-3. Update training scripts to use `MODEL_CONFIG_EFFICIENT` and `TRAINING_CONFIG_EFFICIENT`
-4. Run 10 independent training runs
+1. Ensure all 10 sites are preprocessed
+2. Update training scripts to use `MODEL_CONFIG_EFFICIENT` and `TRAINING_CONFIG_EFFICIENT`
+3. Run 10 independent training runs
 
 ## Notes
 

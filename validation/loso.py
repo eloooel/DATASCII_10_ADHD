@@ -227,19 +227,19 @@ class LeaveOneSiteOutValidator(BaseValidator):
     def _create_train_loader(self, dataset: ADHDDataset, labels: np.ndarray) -> DataLoader:
         """Create training data loader with balanced sampling"""
         
-        # Create balanced sampler
+        # Create balanced sampler with oversampling for minority class
         class_counts = np.bincount(labels)
         class_weights = 1.0 / class_counts
         sample_weights = class_weights[labels]
         
-        # Calculate number of samples per epoch
-        # Use the original dataset size to ensure we see all data once per epoch
-        num_samples_per_epoch = len(sample_weights)
+        # Get oversampling multiplier from config (default 1 = no oversampling)
+        multiplier = self.training_config.get('num_samples_multiplier', 1)
+        num_samples_per_epoch = len(sample_weights) * multiplier
         
         sampler = WeightedRandomSampler(
             weights=sample_weights,
             num_samples=num_samples_per_epoch,
-            replacement=True  # Allow resampling for balance, but limited by num_samples
+            replacement=True  # Allow resampling for balance
         )
         
         return DataLoader(
@@ -314,9 +314,15 @@ class LeaveOneSiteOutValidator(BaseValidator):
                 gamma=self.training_config.get('focal_gamma', 2.0)
             )
         else:
-            # Use label smoothing to prevent overconfident predictions
-            label_smoothing = self.training_config.get('label_smoothing', 0.1)
-            return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+            # Use label smoothing and class weights to handle imbalance
+            label_smoothing = self.training_config.get('label_smoothing', 0.05)
+            class_weights = self.training_config.get('class_weights', None)
+            
+            if class_weights is not None:
+                class_weights = torch.tensor(class_weights, dtype=torch.float32).to(self.device)
+                return nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+            else:
+                return nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     
     def _train_epoch(self, model: nn.Module, train_loader: DataLoader, 
                     criterion: nn.Module, optimizer) -> Dict[str, float]:
