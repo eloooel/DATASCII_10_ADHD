@@ -1,6 +1,6 @@
 """
-Training script for baseline_accurate_v6 configuration
-Merges Peking_1/2/3 into single site for proper LOSO validation
+Training script for baseline_accurate_v7 configuration
+TRUE BASELINE: Exact replication of base study approach without adaptations
 """
 
 import sys
@@ -11,7 +11,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from configs.baseline_accurate_v6_config import MODEL_CONFIG_BASELINE, TRAINING_CONFIG_BASELINE
+from configs.baseline_accurate_v7_config import MODEL_CONFIG_BASELINE, TRAINING_CONFIG_BASELINE
 from validation.loso import LeaveOneSiteOutValidator
 from utils.data_loader import load_features_and_labels
 import torch
@@ -57,13 +57,25 @@ def print_results(run_results, run_idx):
     print(f"{'='*80}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train baseline accurate model v6')
+    parser = argparse.ArgumentParser(description='Train baseline accurate model v7 (TRUE BASELINE)')
     parser.add_argument('--num-runs', type=int, default=5, help='Number of runs')
-    parser.add_argument('--output-dir', type=str, default='data/trained/baseline_accurate_v6')
+    parser.add_argument('--output-dir', type=str, default='data/trained/baseline_accurate_v7')
     args = parser.parse_args()
     
+    print("\n" + "="*80)
+    print("BASELINE V7: TRUE BASELINE REPLICATION")
+    print("="*80)
+    print("Configuration:")
+    print("  - NO class weights (base study approach)")
+    print("  - NO label smoothing")
+    print("  - Balanced mini-batch sampling (via WeightedRandomSampler)")
+    print("  - Binary cross-entropy loss")
+    print("\nExpected: Poor sensitivity (~10%) due to 75/25 imbalance")
+    print("Purpose: Establish baseline to compare against v6's class weighting")
+    print("="*80)
+    
     # Load data with merged Peking sites
-    print("Loading data...")
+    print("\nLoading data...")
     feature_manifest_path = Path('data/features/feature_manifest.csv')
     manifest_df = pd.read_csv(feature_manifest_path)
     
@@ -155,6 +167,8 @@ def main():
     print(f"\n{'='*80}")
     print(f"ALL RUNS COMPLETED")
     print(f"{'='*80}")
+    print("\nNext Step: Compare v7 (no weights) vs v6 (class_weights=[1.0, 4.0])")
+    print("This comparison demonstrates the value of class weighting for imbalanced data.")
 
 if __name__ == '__main__':
     main()

@@ -1,6 +1,6 @@
 """
-Training script for baseline_accurate_v6 configuration
-Merges Peking_1/2/3 into single site for proper LOSO validation
+Training script for baseline_accurate_v9 configuration
+Uses ALL available sites (8 sites total) for maximum data utilization
 """
 
 import sys
@@ -11,7 +11,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from configs.baseline_accurate_v6_config import MODEL_CONFIG_BASELINE, TRAINING_CONFIG_BASELINE
+from configs.baseline_accurate_v9_config import MODEL_CONFIG_BASELINE, TRAINING_CONFIG_BASELINE
 from validation.loso import LeaveOneSiteOutValidator
 from utils.data_loader import load_features_and_labels
 import torch
@@ -57,30 +57,40 @@ def print_results(run_results, run_idx):
     print(f"{'='*80}")
 
 def main():
-    parser = argparse.ArgumentParser(description='Train baseline accurate model v6')
+    parser = argparse.ArgumentParser(description='Train baseline accurate model v9 with ALL sites')
     parser.add_argument('--num-runs', type=int, default=5, help='Number of runs')
-    parser.add_argument('--output-dir', type=str, default='data/trained/baseline_accurate_v6')
+    parser.add_argument('--output-dir', type=str, default='data/trained/baseline_accurate_v9')
     args = parser.parse_args()
     
-    # Load data with merged Peking sites
-    print("Loading data...")
+    # Load data from ALL sites
+    print("="*80)
+    print("BASELINE ACCURATE V9 - ALL SITES")
+    print("="*80)
+    print("Loading data from ALL 8 sites...")
     feature_manifest_path = Path('data/features/feature_manifest.csv')
     manifest_df = pd.read_csv(feature_manifest_path)
     
-    # Filter to baseline sites
+    # Filter to all configured sites
     manifest_df = manifest_df[manifest_df['site'].isin(TRAINING_CONFIG_BASELINE['sites'])]
     
     print(f"\nDataset Summary:")
     print(f"  Total subjects: {len(manifest_df)}")
     print(f"  HC: {(manifest_df['diagnosis'] == 0).sum()} ({(manifest_df['diagnosis'] == 0).sum()/len(manifest_df)*100:.1f}%)")
     print(f"  ADHD: {(manifest_df['diagnosis'] == 1).sum()} ({(manifest_df['diagnosis'] == 1).sum()/len(manifest_df)*100:.1f}%)")
-    print(f"  Sites: {TRAINING_CONFIG_BASELINE['sites']}")
+    print(f"  Sites ({len(TRAINING_CONFIG_BASELINE['sites'])}): {', '.join(TRAINING_CONFIG_BASELINE['sites'])}")
+    
+    print(f"\nPer-site distribution:")
+    site_dist = manifest_df.groupby(['site', 'diagnosis']).size().unstack(fill_value=0)
+    site_dist.columns = ['HC', 'ADHD']
+    site_dist['Total'] = site_dist.sum(axis=1)
+    site_dist['ADHD %'] = (site_dist['ADHD'] / site_dist['Total'] * 100).round(1)
+    print(site_dist.to_string())
     
     # Load features
     fc_matrices, roi_timeseries, labels, sites = load_features_and_labels(manifest_df)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"  Device: {device}")
+    print(f"\n  Device: {device}")
     
     # Run training
     seeds = TRAINING_CONFIG_BASELINE['seeds'][:args.num_runs]
@@ -125,6 +135,7 @@ def main():
                     'fold_id': fold['fold_id'],
                     'test_metrics': {k: float(v) if isinstance(v, (np.floating, float)) else v 
                                     for k, v in fold['test_metrics'].items()},
+                    'best_val_loss': float(fold['best_val_loss']),
                     'final_epoch': fold['final_epoch'],
                     'training_time': fold['training_time']
                 }
@@ -153,7 +164,7 @@ def main():
         print(f"\n✓ Results saved to: {output_path}")
     
     print(f"\n{'='*80}")
-    print(f"ALL RUNS COMPLETED")
+    print(f"ALL RUNS COMPLETED - V9 (ALL 8 SITES)")
     print(f"{'='*80}")
 
 if __name__ == '__main__':

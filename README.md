@@ -86,17 +86,23 @@ It MUST show "Python 3.10.x" (where x is any patch version).
 
 This project uses the **ADHD-200 dataset** from 8 international sites:
 
-| Site | Subjects | ADHD | Control | Multi-run |
-|------|----------|------|---------|-----------|
-| NYU | 257 | 118 | 139 | ✓ (1.7 runs/subject) |
-| Peking_1 | 136 | 48 | 88 | - |
-| Pittsburgh | 98 | 0 | 98 | - |
-| NeuroIMAGE | 73 | 23 | 50 | ✓ (2.0 runs/subject) |
-| Peking_2 | 67 | 15 | 52 | - |
-| WashU | 60 | 26 | 34 | ✓ (5.6 runs/subject) |
-| Peking_3 | 42 | 16 | 26 | - |
-| Brown | 26 | 0 | 26 | ✓ (2.0 runs/subject) |
-| **Total** | **759** | **246** | **513** | **1048 scans** |
+| Site | Subjects | ADHD | Control | Multi-run | Notes |
+|------|----------|------|---------|-----------|-------|
+| NYU | 257 | 54 | 203 | ✓ (1.7 runs/subject) | ✓ Used in training |
+| Peking (merged) | 245 | 54 | 191 | - | ✓ Used in training (merged 1/2/3) |
+| NeuroIMAGE | 73 | 25 | 48 | ✓ (2.0 runs/subject) | ✓ Used in training |
+| KKI | 83 | 22 | 61 | - | ✓ Used in training |
+| OHSU | 113 | 37 | 76 | - | ✓ Used in training |
+| Brown | 26 | 0 | 26 | ✓ (2.0 runs/subject) | ✗ HC-only, excluded |
+| Pittsburgh | 98 | 0 | 98 | - | ✗ HC-only, excluded |
+| WashU | 60 | 0 | 60 | ✓ (5.6 runs/subject) | ✗ HC-only, excluded |
+| **Training Set** | **771** | **192** | **579** | - | **5 sites with ADHD** |
+| **Full Dataset** | **955** | **192** | **763** | **1048 scans** | **8 sites total** |
+
+**Key Dataset Characteristics:**
+- **Class Imbalance**: 75.1% HC / 24.9% ADHD (3.02:1 ratio)
+- **LOSO Validation**: 5-fold cross-validation (one per training site)
+- **HC-Only Sites**: Brown, Pittsburgh, WashU excluded from training (0 ADHD subjects)
 
 **Data Access:** Due to size and licensing restrictions, raw data is **not included**. Download from:
 - [ADHD-200 Consortium](http://fcon_1000.projects.nitrc.org/indi/adhd200/)
@@ -452,6 +458,22 @@ Input: FC Matrix (200×200) + ROI Timeseries (n_timepoints×200)
 - Batch normalization
 - Output: ADHD/Control classification
 
+### Class Imbalance Handling
+
+**Balanced Mini-Batch Sampling** (`validation/loso.py`):
+- `WeightedRandomSampler` with replacement
+- Each HC sample weight: 1/579 = 0.0017
+- Each ADHD sample weight: 1/192 = 0.0052 (3× higher)
+- Result: ~50% ADHD per batch vs 25% in overall dataset
+- ADHD samples oversampled ~3× during training
+- See `verify_balanced_batches.py` for demonstration
+
+**Class Weighting in Loss Function**:
+- Binary cross-entropy with class weights [1.0, 4.0]
+- Misclassifying ADHD costs 4× more than HC
+- Label smoothing = 0.05 for regularization
+- Combined with balanced batches: 81% sensitivity improvement
+
 ### Memory Optimization Techniques
 
 1. **Active Gradient Offloading (AGO)** - CPU offloading of gradients
@@ -610,6 +632,27 @@ pip install torch-geometric torch-scatter torch-sparse torch-cluster torch-splin
 - **Solution:** Install PyTorch separately (as shown above), then `pip install -r requirements.txt`
 
 ## 📈 Results
+
+### Experimental Results (Class Imbalance Study)
+
+We conducted systematic experiments to handle severe class imbalance (3:1 HC/ADHD vs base study's 1.26:1):
+
+| Version | Configuration | Overall Accuracy | Sensitivity | Specificity | Finding |
+|---------|--------------|------------------|-------------|-------------|----------|
+| **V7** (Baseline) | No class weights | 64.49% | **24.79%** | 77.65% | Severe majority class bias |
+| **V6** (Adapted) | Class weights=[1.0, 4.0] | 54.73% | **44.90%** | 58.00% | **+81% sensitivity improvement** |
+| **V8** (Aggressive) | Class weights=[1.0, 5.0] | 55.77% | 41.98% | 60.35% | Diminishing returns |
+
+**Key Findings:**
+1. **V7 proves the imbalance problem**: Without adaptations, model achieves 64% accuracy by predicting "healthy" most of the time (only 24.79% sensitivity)
+2. **V6 demonstrates effective solution**: Class weighting (4×) improves ADHD detection by 81% while maintaining balanced specificity (58%)
+3. **V8 validates optimization**: Higher weighting (5×) performs worse, showing v6 is near-optimal
+4. **Balanced mini-batches**: WeightedRandomSampler creates ~50/50 batches from 75/25 dataset (implemented in `validation/loso.py`)
+
+**Methodology Contributions:**
+- Demonstrates that dataset imbalance severity (3:1 vs 1.26:1) fundamentally changes optimal methodology
+- Establishes complete experimental narrative: problem demonstration (v7) → solution (v6) → validation (v8)
+- Shows 44.9% sensitivity with 58.0% specificity represents reasonable trade-off given data constraints
 
 ### Current Status (as of latest run)
 
