@@ -211,6 +211,17 @@ class LeaveOneSiteOutValidator(BaseValidator):
         
         training_time = time.time() - fold_start_time
         
+        # Save predictions if requested (for ROC/PR curves)
+        predictions_data = None
+        if self.training_config.get('save_predictions', False):
+            predictions_data = {
+                'probabilities': test_metrics['probabilities'],
+                'predictions': test_metrics['predictions'],
+                'true_labels': test_metrics['true_labels'],
+                'test_site': test_site,
+                'fold_id': fold_idx
+            }
+        
         return {
             'fold_id': fold_idx,
             'test_site': test_site,
@@ -221,6 +232,7 @@ class LeaveOneSiteOutValidator(BaseValidator):
             'final_epoch': epoch + 1,
             'training_history': training_history,
             'test_metrics': test_metrics,
+            'predictions_data': predictions_data,
             'model_state': model.state_dict() if self.training_config.get('save_models', False) else None
         }
     

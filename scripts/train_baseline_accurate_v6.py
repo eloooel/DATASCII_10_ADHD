@@ -126,7 +126,8 @@ def main():
                     'test_metrics': {k: float(v) if isinstance(v, (np.floating, float)) else v 
                                     for k, v in fold['test_metrics'].items()},
                     'final_epoch': fold['final_epoch'],
-                    'training_time': fold['training_time']
+                    'training_time': fold['training_time'],
+                    'predictions_data': fold.get('predictions_data', None)
                 }
                 for fold in results['fold_results']
             ]

@@ -148,7 +148,7 @@ class BaseValidator(ABC):
         # Youden's Index
         youden = sensitivity + specificity - 1
         
-        return {
+        metrics = {
             'accuracy': float(accuracy),
             'precision': float(precision),
             'recall': float(recall),
@@ -169,6 +169,8 @@ class BaseValidator(ABC):
             'n_positive': int(np.sum(true_labels == 1)),
             'n_negative': int(np.sum(true_labels == 0))
         }
+        
+        return metrics
     
     def aggregate_results(self, fold_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Aggregate results across folds"""

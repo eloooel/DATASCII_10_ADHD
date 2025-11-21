@@ -66,7 +66,7 @@ def extract_attention_from_model(model, fc_matrix, roi_timeseries, device):
 
 def extract_attention_hook(model, fc_matrix, roi_timeseries, device):
     """
-    Extract attention using forward hooks
+    Extract attention using forward hooks and aggregate multi-head attention
     """
     attention_outputs = {}
     
@@ -96,7 +96,28 @@ def extract_attention_hook(model, fc_matrix, roi_timeseries, device):
     for hook in hooks:
         hook.remove()
     
-    return attention_outputs
+    # Post-process attention weights for visualization
+    processed_attention = {}
+    
+    for name, weights in attention_outputs.items():
+        # Store raw attention
+        processed_attention[f'{name}_raw'] = weights
+        
+        # Aggregate multi-head attention if present
+        if len(weights.shape) == 4 and 'attention' in name and 'dropout' not in name:
+            # Shape: (batch, heads, seq_len, seq_len)
+            batch_size, num_heads, seq_len, _ = weights.shape
+            
+            # Average across heads to get (batch, seq_len, seq_len)
+            avg_attention = weights.mean(axis=1)
+            processed_attention[f'{name}_avg_heads'] = avg_attention
+            
+            # Get attention weights for each position (average across all other positions)
+            # This gives us the "importance" of each timepoint/ROI
+            position_attention = avg_attention.mean(axis=-1)  # (batch, seq_len)
+            processed_attention[f'{name}_position_importance'] = position_attention
+    
+    return processed_attention
 
 
 def train_single_fold_for_attention(fc_matrices, roi_timeseries, labels, sites, 
