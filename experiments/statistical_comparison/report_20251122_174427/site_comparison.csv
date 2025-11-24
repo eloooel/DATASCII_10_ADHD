@@ -1,0 +1,6 @@
+Site,baseline_accurate_v6: Acc,baseline_accurate_v7: Acc,baseline_accurate_v8: Acc
+KKI,0.5301,0.6145,0.5301
+NYU,0.7160,0.6887,0.7588
+NeuroIMAGE,0.4521,0.6027,0.4384
+OHSU,0.5310,0.5487,0.4602
+Peking,0.2408,0.7469,0.4163

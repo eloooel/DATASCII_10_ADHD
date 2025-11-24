@@ -1,0 +1,276 @@
+{
+  "baseline_accurate_v6": {
+    "description": "GNN-STAN V6 (class_weights=1:4, LOSO)",
+    "metric_tests": {
+      "accuracy": {
+        "t_statistic": -1.5424296432027838,
+        "p_value": 0.1978341592382277,
+        "significant": false,
+        "cohens_d": -0.7712148216013919,
+        "effect_size": "medium",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.6403049705083954,
+        "baseline_std": 0.06955589307811393,
+        "experiment_mean": 0.4939836723398601,
+        "experiment_std": 0.1534903042029995,
+        "improvement": -0.1463212981685352,
+        "improvement_percent": -22.851813574453068
+      },
+      "sensitivity": {
+        "t_statistic": 1.6873403335461785,
+        "p_value": 0.16681236395945231,
+        "significant": false,
+        "cohens_d": 0.8436701667730893,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.23875803075803073,
+        "baseline_std": 0.23441654775477314,
+        "experiment_mean": 0.5627700427700427,
+        "experiment_std": 0.22735474998472013,
+        "improvement": 0.324012012012012,
+        "improvement_percent": 135.70727274944815
+      },
+      "specificity": {
+        "t_statistic": -1.7753902395495778,
+        "p_value": 0.15049072972014202,
+        "significant": false,
+        "cohens_d": -0.8876951197747889,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.7807533771914804,
+        "baseline_std": 0.16004870917790104,
+        "experiment_mean": 0.4640030626036945,
+        "experiment_std": 0.2565044278032561,
+        "improvement": -0.3167503145877859,
+        "improvement_percent": -40.569829582703505
+      },
+      "auc": {
+        "t_statistic": -0.6034602025683432,
+        "p_value": 0.5787514824171245,
+        "significant": false,
+        "cohens_d": -0.3017301012841716,
+        "effect_size": "small",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.5336357863852783,
+        "baseline_std": 0.06894111836886092,
+        "experiment_mean": 0.48928130101177525,
+        "experiment_std": 0.10089109132834921,
+        "improvement": -0.04435448537350297,
+        "improvement_percent": -8.311752417121363
+      },
+      "f1": {
+        "t_statistic": 1.6135051718697957,
+        "p_value": 0.18193253676863663,
+        "significant": false,
+        "cohens_d": 0.8067525859348978,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.21588619076961457,
+        "baseline_std": 0.15943058961555048,
+        "experiment_mean": 0.36193478089005143,
+        "experiment_std": 0.09027112931013696,
+        "improvement": 0.14604859012043686,
+        "improvement_percent": 67.65073282352473
+      }
+    },
+    "mcnemar_test": {
+      "mcnemar_statistic": 48.80211081794195,
+      "p_value": 2.8314017797015367e-12,
+      "significant": true,
+      "contingency_table": {
+        "both_correct": 259,
+        "baseline_correct_exp_wrong": 258,
+        "baseline_wrong_exp_correct": 121,
+        "both_wrong": 133
+      },
+      "summary": {
+        "total_samples": 771,
+        "agreement_rate": 0.5084306095979247,
+        "disagreement_rate": 0.4915693904020752,
+        "baseline_advantage": 258,
+        "experiment_advantage": 121,
+        "net_advantage": -137,
+        "interpretation": "Baseline significantly outperforms experiment (p < 0.05, -137 net correct)"
+      }
+    },
+    "descriptive_stats": {
+      "accuracy": {
+        "baseline_mean": 0.6403049705083954,
+        "baseline_std": 0.06955589307811393,
+        "experiment_mean": 0.4939836723398601,
+        "experiment_std": 0.1534903042029995,
+        "mean_difference": -0.1463212981685352,
+        "std_difference": 0.1897283274000178
+      },
+      "sensitivity": {
+        "baseline_mean": 0.23875803075803073,
+        "baseline_std": 0.23441654775477314,
+        "experiment_mean": 0.5627700427700427,
+        "experiment_std": 0.22735474998472013,
+        "mean_difference": 0.324012012012012,
+        "std_difference": 0.38405057423247396
+      },
+      "specificity": {
+        "baseline_mean": 0.7807533771914804,
+        "baseline_std": 0.16004870917790104,
+        "experiment_mean": 0.4640030626036945,
+        "experiment_std": 0.2565044278032561,
+        "mean_difference": -0.3167503145877859,
+        "std_difference": 0.3568233141443275
+      },
+      "auc": {
+        "baseline_mean": 0.5336357863852783,
+        "baseline_std": 0.06894111836886092,
+        "experiment_mean": 0.48928130101177525,
+        "experiment_std": 0.10089109132834921,
+        "mean_difference": -0.04435448537350297,
+        "std_difference": 0.1470005318817349
+      },
+      "f1": {
+        "baseline_mean": 0.21588619076961457,
+        "baseline_std": 0.15943058961555048,
+        "experiment_mean": 0.36193478089005143,
+        "experiment_std": 0.09027112931013696,
+        "mean_difference": 0.14604859012043686,
+        "std_difference": 0.18103268916230345
+      }
+    }
+  },
+  "baseline_accurate_v8": {
+    "description": "GNN-STAN V8 (class_weights=1:5, LOSO)",
+    "metric_tests": {
+      "accuracy": {
+        "t_statistic": -1.8371198640931106,
+        "p_value": 0.14006556944439094,
+        "significant": false,
+        "cohens_d": -0.9185599320465553,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.6403049705083954,
+        "baseline_std": 0.06955589307811393,
+        "experiment_mean": 0.5207470063774379,
+        "experiment_std": 0.12497697035306568,
+        "improvement": -0.11955796413095747,
+        "improvement_percent": -18.672034364504416
+      },
+      "sensitivity": {
+        "t_statistic": 1.6999441045376087,
+        "p_value": 0.16436570727843997,
+        "significant": false,
+        "cohens_d": 0.8499720522688043,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.23875803075803073,
+        "baseline_std": 0.23441654775477314,
+        "experiment_mean": 0.43746983346983354,
+        "experiment_std": 0.19210607877720415,
+        "improvement": 0.19871180271180272,
+        "improvement_percent": 83.22727494481103
+      },
+      "specificity": {
+        "t_statistic": -2.0352884374793985,
+        "p_value": 0.1115395787559548,
+        "significant": false,
+        "cohens_d": -1.0176442187396992,
+        "effect_size": "large",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.7807533771914804,
+        "baseline_std": 0.16004870917790104,
+        "experiment_mean": 0.5302241068807826,
+        "experiment_std": 0.21486812272456327,
+        "improvement": -0.2505292703106978,
+        "improvement_percent": -32.0881443013285
+      },
+      "auc": {
+        "t_statistic": -0.7665650572485406,
+        "p_value": 0.4860791343148146,
+        "significant": false,
+        "cohens_d": -0.3832825286242703,
+        "effect_size": "small",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.5336357863852783,
+        "baseline_std": 0.06894111836886092,
+        "experiment_mean": 0.49681076006957614,
+        "experiment_std": 0.07140154662914701,
+        "improvement": -0.036825026315702114,
+        "improvement_percent": -6.900779006060683
+      },
+      "f1": {
+        "t_statistic": 1.31089845047072,
+        "p_value": 0.2600857706835354,
+        "significant": false,
+        "cohens_d": 0.65544922523536,
+        "effect_size": "medium",
+        "test_type": "paired_t_test",
+        "baseline_mean": 0.21588619076961457,
+        "baseline_std": 0.15943058961555048,
+        "experiment_mean": 0.31549944580258255,
+        "experiment_std": 0.10375877370833443,
+        "improvement": 0.09961325503296795,
+        "improvement_percent": 46.141559438265034
+      }
+    },
+    "mcnemar_test": {
+      "mcnemar_statistic": 32.34765625,
+      "p_value": 1.2891260281477912e-08,
+      "significant": true,
+      "contingency_table": {
+        "both_correct": 343,
+        "baseline_correct_exp_wrong": 174,
+        "baseline_wrong_exp_correct": 82,
+        "both_wrong": 172
+      },
+      "summary": {
+        "total_samples": 771,
+        "agreement_rate": 0.6679636835278858,
+        "disagreement_rate": 0.3320363164721141,
+        "baseline_advantage": 174,
+        "experiment_advantage": 82,
+        "net_advantage": -92,
+        "interpretation": "Baseline significantly outperforms experiment (p < 0.05, -92 net correct)"
+      }
+    },
+    "descriptive_stats": {
+      "accuracy": {
+        "baseline_mean": 0.6403049705083954,
+        "baseline_std": 0.06955589307811393,
+        "experiment_mean": 0.5207470063774379,
+        "experiment_std": 0.12497697035306568,
+        "mean_difference": -0.11955796413095747,
+        "std_difference": 0.13015804408600953
+      },
+      "sensitivity": {
+        "baseline_mean": 0.23875803075803073,
+        "baseline_std": 0.23441654775477314,
+        "experiment_mean": 0.43746983346983354,
+        "experiment_std": 0.19210607877720415,
+        "mean_difference": 0.19871180271180272,
+        "std_difference": 0.23378627824454626
+      },
+      "specificity": {
+        "baseline_mean": 0.7807533771914804,
+        "baseline_std": 0.16004870917790104,
+        "experiment_mean": 0.5302241068807826,
+        "experiment_std": 0.21486812272456327,
+        "mean_difference": -0.2505292703106978,
+        "std_difference": 0.24618551916009077
+      },
+      "auc": {
+        "baseline_mean": 0.5336357863852783,
+        "baseline_std": 0.06894111836886092,
+        "experiment_mean": 0.49681076006957614,
+        "experiment_std": 0.07140154662914701,
+        "mean_difference": -0.036825026315702114,
+        "std_difference": 0.09607801964748953
+      },
+      "f1": {
+        "baseline_mean": 0.21588619076961457,
+        "baseline_std": 0.15943058961555048,
+        "experiment_mean": 0.31549944580258255,
+        "experiment_std": 0.10375877370833443,
+        "mean_difference": 0.09961325503296795,
+        "std_difference": 0.1519770734295988
+      }
+    }
+  }
+}

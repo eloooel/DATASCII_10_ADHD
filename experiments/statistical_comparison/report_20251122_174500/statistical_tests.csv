@@ -1,0 +1,11 @@
+Experiment,Metric,Baseline Mean,Baseline Std,Experiment Mean,Experiment Std,Improvement,Improvement %,p-value,Significant,Cohen's d,Effect Size
+baseline_accurate_v6,Accuracy,0.6403,0.0696,0.4940,0.1535,-0.1463,-22.85%,0.1978,✗,-0.771,medium
+baseline_accurate_v6,Sensitivity,0.2388,0.2344,0.5628,0.2274,0.3240,135.71%,0.1668,✗,0.844,large
+baseline_accurate_v6,Specificity,0.7808,0.1600,0.4640,0.2565,-0.3168,-40.57%,0.1505,✗,-0.888,large
+baseline_accurate_v6,Auc,0.5336,0.0689,0.4893,0.1009,-0.0444,-8.31%,0.5788,✗,-0.302,small
+baseline_accurate_v6,F1,0.2159,0.1594,0.3619,0.0903,0.1460,67.65%,0.1819,✗,0.807,large
+baseline_accurate_v8,Accuracy,0.6403,0.0696,0.5207,0.1250,-0.1196,-18.67%,0.1401,✗,-0.919,large
+baseline_accurate_v8,Sensitivity,0.2388,0.2344,0.4375,0.1921,0.1987,83.23%,0.1644,✗,0.850,large
+baseline_accurate_v8,Specificity,0.7808,0.1600,0.5302,0.2149,-0.2505,-32.09%,0.1115,✗,-1.018,large
+baseline_accurate_v8,Auc,0.5336,0.0689,0.4968,0.0714,-0.0368,-6.90%,0.4861,✗,-0.383,small
+baseline_accurate_v8,F1,0.2159,0.1594,0.3155,0.1038,0.0996,46.14%,0.2601,✗,0.655,medium

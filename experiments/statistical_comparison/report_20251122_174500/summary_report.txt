@@ -1,0 +1,45 @@
+======================================================================
+EXPERIMENT COMPARISON SUMMARY REPORT
+======================================================================
+
+Generated: 2025-11-22 17:45:00
+Number of experiments: 3
+
+Experiments:
+  - baseline_accurate_v6: GNN-STAN V6 (class_weights=1:4, LOSO)
+  - baseline_accurate_v7: GNN-STAN V7 (no class weights, LOSO)
+  - baseline_accurate_v8: GNN-STAN V8 (class_weights=1:5, LOSO)
+
+======================================================================
+COMPARISON TABLE
+======================================================================
+
+          Experiment               Accuracy             Sensitivity            Specificity                    Auc                      F1              Precision                  Recall
+baseline_accurate_v6 0.4940 (0.2809-0.7071)  0.5628 (0.2472-0.8784) 0.4640 (0.1079-0.8201) 0.4893 (0.3492-0.6293)  0.3619 (0.2366-0.4873) 0.2906 (0.2123-0.3689)  0.5628 (0.2472-0.8784)
+baseline_accurate_v7 0.6403 (0.5437-0.7369) 0.2388 (-0.0867-0.5642) 0.7808 (0.5586-1.0029) 0.5336 (0.4379-0.6293) 0.2159 (-0.0054-0.4372) 0.2411 (0.1264-0.3558) 0.2388 (-0.0867-0.5642)
+baseline_accurate_v8 0.5207 (0.3473-0.6942)  0.4375 (0.1708-0.7042) 0.5302 (0.2319-0.8285) 0.4968 (0.3977-0.5959)  0.3155 (0.1715-0.4595) 0.2768 (0.1968-0.3567)  0.4375 (0.1708-0.7042)
+
+======================================================================
+STATISTICAL TESTS (vs. baseline_accurate_v7)
+======================================================================
+
+METRIC TESTS (Paired t-tests):
+----------------------------------------------------------------------
+          Experiment      Metric Baseline Mean Baseline Std Experiment Mean Experiment Std Improvement Improvement % p-value Significant Cohen's d Effect Size
+baseline_accurate_v6    Accuracy        0.6403       0.0696          0.4940         0.1535     -0.1463       -22.85%  0.1978           ✗    -0.771      medium
+baseline_accurate_v6 Sensitivity        0.2388       0.2344          0.5628         0.2274      0.3240       135.71%  0.1668           ✗     0.844       large
+baseline_accurate_v6 Specificity        0.7808       0.1600          0.4640         0.2565     -0.3168       -40.57%  0.1505           ✗    -0.888       large
+baseline_accurate_v6         Auc        0.5336       0.0689          0.4893         0.1009     -0.0444        -8.31%  0.5788           ✗    -0.302       small
+baseline_accurate_v6          F1        0.2159       0.1594          0.3619         0.0903      0.1460        67.65%  0.1819           ✗     0.807       large
+baseline_accurate_v8    Accuracy        0.6403       0.0696          0.5207         0.1250     -0.1196       -18.67%  0.1401           ✗    -0.919       large
+baseline_accurate_v8 Sensitivity        0.2388       0.2344          0.4375         0.1921      0.1987        83.23%  0.1644           ✗     0.850       large
+baseline_accurate_v8 Specificity        0.7808       0.1600          0.5302         0.2149     -0.2505       -32.09%  0.1115           ✗    -1.018       large
+baseline_accurate_v8         Auc        0.5336       0.0689          0.4968         0.0714     -0.0368        -6.90%  0.4861           ✗    -0.383       small
+baseline_accurate_v8          F1        0.2159       0.1594          0.3155         0.1038      0.0996        46.14%  0.2601           ✗     0.655      medium
+
+======================================================================
+McNEMAR'S TEST (Classification Agreement):
+----------------------------------------------------------------------
+          Experiment McNemar Statistic p-value Significant  Total Samples  Both Correct  Baseline Only Correct  Experiment Only Correct  Both Wrong  Net Advantage Agreement Rate                                                             Interpretation
+baseline_accurate_v6           48.8021  0.0000           ✓            771           259                    258                      121         133           -137         0.5084 Baseline significantly outperforms experiment (p < 0.05, -137 net correct)
+baseline_accurate_v8           32.3477  0.0000           ✓            771           343                    174                       82         172            -92         0.6680  Baseline significantly outperforms experiment (p < 0.05, -92 net correct)
