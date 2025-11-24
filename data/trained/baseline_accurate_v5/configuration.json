@@ -1,0 +1,85 @@
+{
+  "model_config": {
+    "hidden_dim": 128,
+    "num_classes": 2,
+    "num_heads": 4,
+    "dropout": 0.3,
+    "gnn_config": {
+      "hidden_dims": [
+        128,
+        64,
+        32
+      ],
+      "dropout": 0.3,
+      "pool_ratios": [
+        0.8,
+        0.6
+      ]
+    },
+    "stan_config": {
+      "hidden_dim": 128,
+      "num_layers": 2,
+      "dropout": 0.3
+    },
+    "fusion_config": {
+      "fusion_dim": 128,
+      "dropout": 0.3
+    },
+    "classifier_dropout": 0.5
+  },
+  "training_config": {
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 100,
+    "optimizer": "adam",
+    "weight_decay": 1e-05,
+    "early_stopping": true,
+    "patience": 15,
+    "min_delta": 0.001,
+    "validation_strategy": "loso",
+    "sites": [
+      "NYU",
+      "Peking_1",
+      "Peking_2",
+      "Peking_3",
+      "NeuroIMAGE",
+      "KKI",
+      "OHSU"
+    ],
+    "max_rois": 15,
+    "use_focal_loss": false,
+    "label_smoothing": 0.05,
+    "class_weights": [
+      1.0,
+      4.0
+    ],
+    "focal_alpha": 0.25,
+    "focal_gamma": 2.0,
+    "num_runs": 5,
+    "seeds": [
+      42,
+      123,
+      456,
+      789,
+      2024
+    ],
+    "metrics": [
+      "accuracy",
+      "sensitivity",
+      "specificity",
+      "auc",
+      "f1"
+    ],
+    "save_best_model": true,
+    "save_predictions": true,
+    "output_dir": "data/trained/baseline_accurate"
+  },
+  "expected_results": {
+    "accuracy": "72\u00b11%",
+    "sensitivity": "70\u00b12%",
+    "specificity": "74\u00b12%",
+    "auc": "0.78\u00b10.02"
+  },
+  "num_runs": 5,
+  "timestamp": "2025-11-19T13:04:13.900594"
+}

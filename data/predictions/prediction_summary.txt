@@ -1,0 +1,24 @@
+Prediction Summary
+======================================================================
+
+V6:
+  Total predictions: 771
+  Correct: 380
+  Accuracy: 49.29%
+  ADHD samples: 192
+  HC samples: 579
+
+V7:
+  Total predictions: 771
+  Correct: 517
+  Accuracy: 67.06%
+  ADHD samples: 192
+  HC samples: 579
+
+V8:
+  Total predictions: 771
+  Correct: 425
+  Accuracy: 55.12%
+  ADHD samples: 192
+  HC samples: 579
+

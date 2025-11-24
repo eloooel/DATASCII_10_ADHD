@@ -22,35 +22,65 @@ share/python-wheels/
 .installed.cfg
 *.egg
 PIPFILE.lock
+uv.lock
 
 # Virtual Environment
 .venv/
 venv/
 ENV/
 env/
+thesis-adhd/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.python-version
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Data files (you may want to customize this)
+# Data files
 *.nii
 *.nii.gz
-data/*/
-!data/*/README.md
-__pycache__
 data/raw/
+data/preprocessed/
+data/features/
+data/splits/
+data/trained/*/run_*/
+data/trained/checkpoints/
+data/attention_weights/
+data/roi_ranking/
+data/site_configs/
+data/ablation_results/
 
+# Keep only the final predictions and README files
+!data/predictions/
+!data/*/README.md
 
-# Outputs
-outputs/*/
-!outputs/*/README.md
+# Outputs and Results
+outputs/
+experiments/
+feature_extraction_outputs/
+figures/*.png
+figures/*.pdf
+!figures/README.md
+
+# Temporary files
+*.log
+*.tmp
+*_temp.py
+*_test.py
+CLEANUP_LOG.txt
+MULTI_SITE_UPDATE.txt
+TASK_COMPLETION_REPORT.md
 
 # Papers and documentation
 base study.txt
+
+# Model checkpoints (keep only final trained models)
+*.pth
+*.pt
+!data/trained/*/best_model.pth
