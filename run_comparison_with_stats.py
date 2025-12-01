@@ -48,9 +48,9 @@ def main():
                 results_path=exp_info["path"],
                 description=exp_info["description"]
             )
-            print(f"✓ Loaded: {exp_name}")
+            print(f"Loaded: {exp_name}")
         else:
-            print(f"⚠️  Not found: {exp_info['path']}")
+            print(f"Not found: {exp_info['path']}")
     
     # Generate full report with statistical tests
     print("\n" + "="*70)
@@ -61,7 +61,7 @@ def main():
     comparer.generate_full_report(baseline_experiment="baseline_accurate_v7")
     
     print("\n" + "="*70)
-    print("✅ Comparison complete!")
+    print("Success: Comparison complete!")
     print("="*70)
     print(f"\nResults saved to: {output_dir}")
     print("\nGenerated files include:")

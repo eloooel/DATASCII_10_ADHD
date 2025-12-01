@@ -151,7 +151,7 @@ def main():
         with open(output_path / 'summary.json', 'w') as f:
             json.dump(summary, f, indent=2)
         
-        print(f"\n✓ Results saved to: {output_path}")
+        print(f"\nSuccess: Results saved to: {output_path}")
     
     print(f"\n{'='*80}")
     print(f"ALL RUNS COMPLETED")

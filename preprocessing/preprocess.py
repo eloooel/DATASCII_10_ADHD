@@ -82,7 +82,7 @@ class PreprocessingPipeline:
             },
             'denoising': {
                 'motion_regression': True,
-                'ica_aroma': {  # ✅ ICA-AROMA configuration
+                'ica_aroma': {  # ICA-AROMA configuration
                     'enabled': True,
                     'n_components': 25,
                     'max_iter': 200,
@@ -142,10 +142,10 @@ class PreprocessingPipeline:
             # Pipeline stages in correct order
             data_img, motion_params = self._motion_correction(data_img, self.config['motion_correction'])
             data_img = self._slice_timing_correction(data_img, self.config['slice_timing_correction'], metadata)
-            data_img = self._spatial_normalization(data_img, self.config['spatial_normalization'])  # ✅ Now includes MNI152
+            data_img = self._spatial_normalization(data_img, self.config['spatial_normalization'])  # Now includes MNI152
             data_img = self._temporal_filtering(data_img, self.config['temporal_filtering'], metadata)
             
-            # ✅ ICA-AROMA after temporal filtering, before other denoising
+            # ICA-AROMA after temporal filtering, before other denoising
             if self.config['denoising'].get('ica_aroma', {}).get('enabled', True):
                 data_img, ica_results = self._ica_aroma(data_img, motion_params, self.config['denoising']['ica_aroma'])
             else:
@@ -162,7 +162,7 @@ class PreprocessingPipeline:
                 'confound_regressors': confound_regressors,
                 'brain_mask': brain_mask,
                 'motion_parameters': motion_params,
-                'ica_results': ica_results,  # ✅ Add ICA results
+                'ica_results': ica_results,  # Add ICA results
                 'metadata': metadata,
                 'processing_log': self.processing_log,
                 'subject_id': self.subject_id,
@@ -183,7 +183,7 @@ class PreprocessingPipeline:
         """Load and validate input fMRI data with CUDA support"""
         data = nib.load(input_path)
         
-        # ✅ FIXED: Ensure float32 and avoid object arrays
+        # FIXED: Ensure float32 and avoid object arrays
         img_data_np = data.get_fdata().astype(np.float32)
         img_data = torch.from_numpy(img_data_np).to(self.device)
         
@@ -213,11 +213,11 @@ class PreprocessingPipeline:
 
         # Get data and metadata - ensure proper data types
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = data_img.get_fdata().astype(np.float32)  # ✅ Force float32
+            img_data = data_img.get_fdata().astype(np.float32)  # Force float32
             affine = data_img.affine
             header = data_img.header
         elif torch.is_tensor(data_img):
-            img_data = data_img.cpu().numpy().astype(np.float32)  # ✅ Force float32
+            img_data = data_img.cpu().numpy().astype(np.float32)  # Force float32
             affine = self.metadata['affine']
             header = None
         else:
@@ -239,13 +239,13 @@ class PreprocessingPipeline:
 
         # Initialize motion parameters
         motion_params = {
-            'translations': np.zeros((n_vols, 3), dtype=np.float32),  # ✅ Explicit dtype
-            'rotations': np.zeros((n_vols, 3), dtype=np.float32),     # ✅ Explicit dtype
-            'displacement': np.zeros(n_vols, dtype=np.float32),       # ✅ Explicit dtype
+            'translations': np.zeros((n_vols, 3), dtype=np.float32),  # Explicit dtype
+            'rotations': np.zeros((n_vols, 3), dtype=np.float32),     # Explicit dtype
+            'displacement': np.zeros(n_vols, dtype=np.float32),       # Explicit dtype
             'excluded_volumes': []
         }
 
-        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # ✅ Fixed parenthesis
+        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # Fixed parenthesis
 
         # Process each volume
         for vol_idx in range(n_vols):
@@ -272,7 +272,7 @@ class PreprocessingPipeline:
                 
                 # Check for excessive motion
                 if displacement > params.get('max_displacement_mm', 3.0):
-                    motion_params['excluded_volumes'].append(vol_idx)  # ✅ ADDED MISSING LINE
+                    motion_params['excluded_volumes'].append(vol_idx)  # ADDED MISSING LINE
 
         # Always return NIfTI
         corrected_img = nib.Nifti1Image(corrected_data, affine, header)
@@ -369,7 +369,7 @@ class PreprocessingPipeline:
                     voxel_ts = slice_data[x, y, :]
                     
                     if np.any(voxel_ts != 0):  # Skip empty voxels
-                        # ✅ ADDED: Linear interpolation for slice timing correction
+                        # ADDED: Linear interpolation for slice timing correction
                         corrected_ts = np.interp(original_times, shifted_times, voxel_ts)
                         corrected_data[x, y, z, :] = corrected_ts
                     else:
@@ -446,11 +446,11 @@ class PreprocessingPipeline:
 
         # Get data and affine/header
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = data_img.get_fdata().astype(np.float32)  # ✅ Ensure float32
+            img_data = data_img.get_fdata().astype(np.float32)  # Ensure float32
             affine = data_img.affine
             header = data_img.header
         else:
-            img_data = np.array(data_img, dtype=np.float32)  # ✅ Force float32
+            img_data = np.array(data_img, dtype=np.float32)  # Force float32
             affine = metadata['affine']
             header = None
 
@@ -491,11 +491,11 @@ class PreprocessingPipeline:
         
         for i in range(total_voxels):
             x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
-            voxel_ts = filtered_data[x, y, z, :].astype(np.float32)  # ✅ Ensure float32
+            voxel_ts = filtered_data[x, y, z, :].astype(np.float32)  # Ensure float32
             
             if np.any(voxel_ts != 0):
                 try:
-                    # ✅ ADDED: Complete filtering implementation
+                    # ADDED: Complete filtering implementation
                     # Linear detrending
                     t = np.arange(len(voxel_ts), dtype=np.float32)
                     p = np.polyfit(t, voxel_ts, deg=1)
@@ -507,7 +507,7 @@ class PreprocessingPipeline:
                     filtered_data[x, y, z, :] = filtered_ts + trend
                         
                 except Exception as e:
-                    # ✅ ADDED: Keep original if filtering fails
+                    # ADDED: Keep original if filtering fails
                     filtered_data[x, y, z, :] = voxel_ts
 
         # Always return NIfTI
@@ -711,7 +711,7 @@ class PreprocessingPipeline:
                 for voxel_idx in range(n_brain_voxels):
                     voxel_ts = cleaned_timeseries[:, voxel_idx]
                     
-                    # ✅ COMPLETE: Linear regression implementation
+                    # COMPLETE: Linear regression implementation
                     correlation = np.corrcoef(voxel_ts, component_ts)[0, 1]
                     if not np.isnan(correlation) and abs(correlation) > 0.1:
                         # Calculate regression coefficient
@@ -763,7 +763,7 @@ class PreprocessingPipeline:
                 if not np.isnan(correlation) and abs(correlation) > params.get('motion_correlation_threshold', 0.3):
                     is_motion = True
             
-            # ✅ COMPLETE: Criterion 2 implementation
+            # COMPLETE: Criterion 2 implementation
             if not is_motion:
                 try:
                     # Frequency domain analysis
@@ -782,7 +782,7 @@ class PreprocessingPipeline:
                 except:
                     pass  # Skip frequency analysis if it fails
             
-            # ✅ COMPLETE: Criterion 3 implementation
+            # COMPLETE: Criterion 3 implementation
             if not is_motion:
                 try:
                     spatial_map = ica_spatial_maps[comp_idx, :]
@@ -816,7 +816,7 @@ class PreprocessingPipeline:
         non_zero_voxels = mean_img[mean_img > 0]
         
         if len(non_zero_voxels) == 0:
-            print(f"⚠️  {self.subject_id}: No non-zero voxels found!")
+            print(f"Warning: {self.subject_id}: No non-zero voxels found!")
             return np.zeros(mean_img.shape, dtype=np.uint8)
         
         # Use multiple thresholding approaches and take the best
@@ -858,7 +858,7 @@ class PreprocessingPipeline:
         # Final validation
         mask_size_mb = best_mask.nbytes / (1024 * 1024)
         
-        # ✅ ONLY print details if there's a problem
+        # ONLY print details if there's a problem
         if mask_size_mb < 0.1 or best_coverage < 0.1:
             print(f"Mask validation issues for {self.subject_id}:")
             print(f"   - Shape: {best_mask.shape}")
@@ -869,7 +869,7 @@ class PreprocessingPipeline:
             if mask_size_mb < 0.1:
                 self._log_step("brain_mask", "warning", f"Suspiciously small mask: {mask_size_mb:.2f}MB")
     
-        # ✅ SUCCESS: Only log to processing log, no console spam
+        # SUCCESS: Only log to processing log, no console spam
         self._log_step("brain_mask", "success", 
                       f"Generated mask: {best_mask.sum()} voxels ({best_coverage*100:.1f}% coverage)")
         
@@ -912,53 +912,53 @@ def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose
     """Verify that a NIfTI file was written correctly and is not corrupted"""
     if not output_path.exists():
         if verbose:
-            print(f"❌ Verification failed: File does not exist: {output_path}")
+            print(f"Failed: Verification failed: File does not exist: {output_path}")
         return False
     
     try:
         # Check file size
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
         if verbose:
-            print(f"   📏 Checking {output_path.name}: {file_size_mb:.2f}MB")
+            print(f"   Checking {output_path.name}: {file_size_mb:.2f}MB")
             
         if file_size_mb < min_size_mb:
             if verbose:
-                print(f"❌ Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
+                print(f"Failed: Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
             return False
         
         # Test gzip integrity
         if output_path.suffix == '.gz':
             try:
                 if verbose:
-                    print(f"   🔍 Testing gzip integrity: {output_path.name}")
+                    print(f"   Testing gzip integrity: {output_path.name}")
                 with gzip.open(output_path, 'rb') as f:
                     chunk = f.read(1024 * 1024)
                     if len(chunk) == 0:
                         if verbose:
-                            print(f"❌ Verification failed: Gzip file appears empty: {output_path}")
+                            print(f"Failed: Verification failed: Gzip file appears empty: {output_path}")
                         return False
                 if verbose:
-                    print(f"   ✅ Gzip integrity: PASSED")
+                    print(f"   Success: Gzip integrity: PASSED")
             except Exception as gz_error:
                 if verbose:
-                    print(f"❌ Verification failed: Gzip corruption in {output_path}: {gz_error}")
+                    print(f"Failed: Verification failed: Gzip corruption in {output_path}: {gz_error}")
                 return False
         
         # Test NIfTI loading
         try:
             if verbose:
-                print(f"   🔍 Testing NIfTI loading: {output_path.name}")
+                print(f"   Testing NIfTI loading: {output_path.name}")
             import nibabel as nib
             img = nib.load(output_path)
             
             # Basic shape validation
             if len(img.shape) < 3:
                 if verbose:
-                    print(f"❌ Verification failed: Invalid dimensions {img.shape}: {output_path}")
+                    print(f"Failed: Verification failed: Invalid dimensions {img.shape}: {output_path}")
                 return False
             
             if verbose:
-                print(f"   ✅ NIfTI shape: {img.shape}")
+                print(f"   Success: NIfTI shape: {img.shape}")
             
             # Test reading a small sample of data
             if len(img.shape) == 4:
@@ -968,24 +968,24 @@ def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose
             
             if test_data is None or test_data.size == 0:
                 if verbose:
-                    print(f"❌ Verification failed: Cannot read NIfTI data: {output_path}")
+                    print(f"Failed: Verification failed: Cannot read NIfTI data: {output_path}")
                 return False
             
             if verbose:
-                print(f"   ✅ Data sample read successfully")
+                print(f"   Success: Data sample read successfully")
                 
         except Exception as nii_error:
             if verbose:
-                print(f"❌ Verification failed: NIfTI loading error in {output_path}: {nii_error}")
+                print(f"Failed: Verification failed: NIfTI loading error in {output_path}: {nii_error}")
             return False
         
         if verbose:
-            print(f"✅ Verification passed: {output_path.name} ({file_size_mb:.1f}MB)")
+            print(f"Success: Verification passed: {output_path.name} ({file_size_mb:.1f}MB)")
         return True
         
     except Exception as e:
         if verbose:
-            print(f"❌ Verification failed: Unexpected error in {output_path}: {e}")
+            print(f"Failed: Verification failed: Unexpected error in {output_path}: {e}")
         return False
 
 def cleanup_failed_subject(subject_out_dir: Path):
@@ -994,10 +994,10 @@ def cleanup_failed_subject(subject_out_dir: Path):
         import shutil
         try:
             shutil.rmtree(subject_out_dir)
-            print(f"🧹 Cleaned up failed subject directory: {subject_out_dir}")
+            print(f"Cleaned up failed subject directory: {subject_out_dir}")
             return True
         except Exception as e:
-            print(f"⚠️ Failed to cleanup {subject_out_dir}: {e}")
+            print(f"Warning: Failed to cleanup {subject_out_dir}: {e}")
             return False
     return True
 
@@ -1053,7 +1053,7 @@ def _process_subject(row):
     import time
     
     # Add a verbose flag for debugging
-    debug_verbose = False  # ✅ Set to True only when debugging
+    debug_verbose = False  # Set to True only when debugging
     
     try:
         # Check available memory before processing
@@ -1070,7 +1070,7 @@ def _process_subject(row):
             if memory.percent > 90:
                 raise RuntimeError(f"Insufficient memory ({memory.percent:.1f}% used). Cannot safely process.")
         
-        # ✅ ADDED: Force retry flag check
+        # ADDED: Force retry flag check
         force_retry = row.get('force_retry', False)
         
         # Get device from row if available
@@ -1081,13 +1081,13 @@ def _process_subject(row):
         pipeline = PreprocessingPipeline(device=device)
         subject_id = row["subject_id"]
         
-        # ✅ MULTI-RUN SUPPORT: Check if we need to concatenate multiple runs
+        # MULTI-RUN SUPPORT: Check if we need to concatenate multiple runs
         # This happens when metadata has multiple rows for the same subject
         if 'all_runs' in row and isinstance(row['all_runs'], list) and len(row['all_runs']) > 1:
             # Multi-run concatenation mode
             func_paths = [Path(p) for p in row['all_runs']]
             num_runs = len(func_paths)
-            print(f"📊 {subject_id}: Processing {num_runs} runs for concatenation")
+            print(f"Processing: {subject_id}: Processing {num_runs} runs for concatenation")
             multi_run = True
         else:
             # Single run mode (backward compatibility)
@@ -1095,15 +1095,15 @@ def _process_subject(row):
             num_runs = 1
             multi_run = False
         
-        # ✅ VALIDATE ALL INPUT FILES
+        # VALIDATE ALL INPUT FILES
         for idx, func_path in enumerate(func_paths):
             corruption_check = validate_input_file(func_path)
             
             if not corruption_check['valid']:
-                print(f"❌ {subject_id} run-{idx+1}/{num_runs}: Input validation failed - {corruption_check['message']}")
+                print(f"Failed: {subject_id} run-{idx+1}/{num_runs}: Input validation failed - {corruption_check['message']}")
                 raise FileCorruptionError(f"Input file corrupted: {corruption_check['error_type']}")
             elif debug_verbose:
-                print(f"🔍 Validating input file: {subject_id} run-{idx+1}/{num_runs}")
+                print(f"Validating input file: {subject_id} run-{idx+1}/{num_runs}")
         
         # Extract site name from first run
         func_path = func_paths[0]
@@ -1135,11 +1135,11 @@ def _process_subject(row):
         func_output_path = subj_out / "func_preproc.nii.gz"
         mask_output_path = subj_out / "mask.nii.gz"
 
-        # ✅ MODIFIED: Skip verification check if force_retry is True
+        # MODIFIED: Skip verification check if force_retry is True
         if not force_retry and func_output_path.exists() and mask_output_path.exists():
             if (verify_output_integrity(func_output_path, min_size_mb=10.0) and 
                 verify_output_integrity(mask_output_path, min_size_mb=0.02)): 
-                print(f"⏭️  {subject_id}: Already processed and verified - SKIPPED")
+                print(f"Skipped: {subject_id}: Already processed and verified - SKIPPED")
                 return {
                     "status": "success",
                     "subject_id": subject_id,
@@ -1150,24 +1150,24 @@ def _process_subject(row):
                     "message": f"Already processed and verified: {subject_id}"
                 }
         
-        # ✅ ADDED: Clean up corrupted files before retry
+        # ADDED: Clean up corrupted files before retry
         if force_retry:
-            print(f"🔄 Force retry enabled for {subject_id} - cleaning up old files")
+            print(f"Force retry enabled for {subject_id} - cleaning up old files")
             if func_output_path.exists():
                 func_output_path.unlink()
-                print(f"   🧹 Removed old functional file")
+                print(f"   Removed old functional file")
             if mask_output_path.exists():
                 mask_output_path.unlink()
-                print(f"   🧹 Removed old mask file")
+                print(f"   Removed old mask file")
             confounds_path = subj_out / "confounds.csv"
             if confounds_path.exists():
                 confounds_path.unlink()
-                print(f"   🧹 Removed old confounds file")
+                print(f"   Removed old confounds file")
 
-        # ✅ ADDED: Memory-optimized processing configuration for problematic subjects
+        # ADDED: Memory-optimized processing configuration for problematic subjects
         memory_optimized_config = pipeline.config.copy()
         if memory.percent > 70:
-            print(f"⚠️ Applying memory-optimized settings ({memory.percent:.1f}% memory used)")
+            print(f"Warning: Applying memory-optimized settings ({memory.percent:.1f}% memory used)")
             # Reduce ICA components for memory-constrained environments
             if 'denoising' in memory_optimized_config:
                 if 'ica_aroma' in memory_optimized_config['denoising']:
@@ -1176,13 +1176,13 @@ def _process_subject(row):
                     memory_optimized_config['denoising']['acompcor']['n_components'] = 3
             pipeline.config = memory_optimized_config
 
-        # ✅ MULTI-RUN PROCESSING: Process each run separately, then concatenate
+        # MULTI-RUN PROCESSING: Process each run separately, then concatenate
         if multi_run:
             print(f"   Processing {num_runs} runs for {subject_id}...")
             preprocessed_runs = []
             
             for run_idx, run_path in enumerate(func_paths):
-                print(f"   📊 Run {run_idx+1}/{num_runs}: {run_path.name}")
+                print(f"   Processing: Run {run_idx+1}/{num_runs}: {run_path.name}")
                 
                 # Test NIfTI loading
                 try:
@@ -1208,10 +1208,10 @@ def _process_subject(row):
                     proc_array = np.array(proc_data)
                 
                 preprocessed_runs.append(proc_array)
-                print(f"      ✅ Run {run_idx+1} completed: shape {proc_array.shape}")
+                print(f"      Success: Run {run_idx+1} completed: shape {proc_array.shape}")
             
             # Concatenate all runs along time dimension (axis=-1)
-            print(f"   🔗 Concatenating {num_runs} runs...")
+            print(f"   Concatenating {num_runs} runs...")
             concatenated_data = np.concatenate(preprocessed_runs, axis=-1)
             print(f"      Final shape: {concatenated_data.shape} ({concatenated_data.shape[-1]} timepoints total)")
             
@@ -1242,7 +1242,7 @@ def _process_subject(row):
             # Get processed data
             proc_data = result["processed_data"] 
             
-            # ✅ FIX: Define original_affine here
+            # FIX: Define original_affine here
             original_img = nib.load(str(func_path.absolute()))
             original_affine = original_img.affine
             
@@ -1261,7 +1261,7 @@ def _process_subject(row):
         # Save functional file
         nib.save(proc_nifti, func_output_path)
 
-        # ✅ VERIFY FUNCTIONAL FILE
+        # VERIFY FUNCTIONAL FILE
         if not verify_output_integrity(func_output_path, min_size_mb=10.0, verbose=False):
             if func_output_path.exists():
                 func_output_path.unlink()
@@ -1270,14 +1270,14 @@ def _process_subject(row):
         try:
             brain_mask = result["brain_mask"]
             
-            # ✅ ALWAYS calculate these values (needed for validation)
+            # ALWAYS calculate these values (needed for validation)
             mask_voxels = np.sum(brain_mask > 0)
             mask_coverage = mask_voxels / brain_mask.size
             expected_size_mb = brain_mask.nbytes / (1024 * 1024)
             
-            # ✅ Only print details if verbose
+            # Only print details if verbose
             if debug_verbose:
-                print(f"   🔍 Mask details before saving:")
+                print(f"   Info: Mask details before saving:")
                 print(f"   - Data type: {brain_mask.dtype}")
                 print(f"   - Shape: {brain_mask.shape}")
                 print(f"   - Min/Max values: {brain_mask.min()}/{brain_mask.max()}")
@@ -1293,11 +1293,11 @@ def _process_subject(row):
                 if mask_coverage < 0.01:
                     raise ValueError(f"Brain mask coverage too low: {mask_coverage*100:.2f}% (expected >1%)")
         
-            # ✅ Basic validation (always runs)
+            # Basic validation (always runs)
             if mask_voxels < 100:  # Very basic check
                 raise ValueError(f"Brain mask has too few voxels: {mask_voxels}")
             
-            # ✅ ENSURE PROPER DATA TYPE AND AFFINE
+            # ENSURE PROPER DATA TYPE AND AFFINE
             # Force uint8 data type explicitly
             clean_mask = brain_mask.astype(np.uint8)
             
@@ -1309,35 +1309,35 @@ def _process_subject(row):
             original_affine = original_img.affine
             original_header = original_img.header.copy()
             
-            # ✅ CREATE MASK NIFTI WITH EXPLICIT SETTINGS
+            # CREATE MASK NIFTI WITH EXPLICIT SETTINGS
             mask_nifti = nib.Nifti1Image(
                 clean_mask,
                 original_affine,
                 header=None  # Let nibabel create a fresh header
             )
             
-            # ✅ FORCE CORRECT HEADER SETTINGS
+            # FORCE CORRECT HEADER SETTINGS
             mask_header = mask_nifti.header
             mask_header.set_data_dtype(np.uint8)  # Explicitly set uint8
             mask_header.set_slope_inter(1, 0)     # No scaling
             
-            # ✅ ONLY print details if verbose
+            # ONLY print details if verbose
             if debug_verbose:
-                print(f"   🔍 NIfTI image details:")
+                print(f"   Info: NIfTI image details:")
                 print(f"   - NIfTI shape: {mask_nifti.shape}")
                 print(f"   - NIfTI dtype: {mask_nifti.get_data_dtype()}")
                 print(f"   - Header dtype: {mask_header.get_data_dtype()}")
             
-            # ✅ ROBUST SAVING - ONLY PRINT ERRORS OR IF VERBOSE
+            # ROBUST SAVING - ONLY PRINT ERRORS OR IF VERBOSE
             max_save_attempts = 3
             save_successful = False
 
             for attempt in range(max_save_attempts):
                 try:
-                    # ✅ SAVE WITH EXPLICIT COMPRESSION AND FLUSH
+                    # SAVE WITH EXPLICIT COMPRESSION AND FLUSH
                     nib.save(mask_nifti, mask_output_path)
                     
-                    # ✅ FORCE FILE SYSTEM SYNC
+                    # FORCE FILE SYSTEM SYNC
                     import os
                     if hasattr(os, 'sync'):
                         os.sync()  # Unix/Linux
@@ -1357,24 +1357,24 @@ def _process_subject(row):
                             test_data = test_load.get_fdata()
                             test_voxels = np.sum(test_data > 0)
                             
-                            if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # ✅ Lowered from 0.05 to 0.01
+                            if test_voxels == mask_voxels and saved_size_mb >= 0.01:  # Lowered from 0.05 to 0.01
                                 if debug_verbose:
-                                    print(f"   ✅ Attempt {attempt + 1}: Save successful!")
+                                    print(f"   Success: Attempt {attempt + 1}: Save successful!")
                                 save_successful = True
                                 break
                             else:
-                                print(f"❌ {subject_id}: Attempt {attempt + 1} verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
+                                print(f"Failed: {subject_id}: Attempt {attempt + 1} verification failed - voxels={test_voxels}, size={saved_size_mb:.2f}MB")
                                 if mask_output_path.exists():
                                     mask_output_path.unlink()
                         except Exception as load_error:
-                            print(f"❌ {subject_id}: Attempt {attempt + 1} cannot load saved file: {load_error}")
+                            print(f"Failed: {subject_id}: Attempt {attempt + 1} cannot load saved file: {load_error}")
                             if mask_output_path.exists():
                                 mask_output_path.unlink()
                     else:
-                        print(f"❌ {subject_id}: Attempt {attempt + 1} file was not created")
+                        print(f"Failed: {subject_id}: Attempt {attempt + 1} file was not created")
                 
                 except Exception as save_error:
-                    print(f"❌ {subject_id}: Attempt {attempt + 1} save error: {save_error}")
+                    print(f"Failed: {subject_id}: Attempt {attempt + 1} save error: {save_error}")
                     if mask_output_path.exists():
                         mask_output_path.unlink()
 

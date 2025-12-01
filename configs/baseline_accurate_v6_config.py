@@ -1,19 +1,4 @@
-"""
-Baseline-Accurate Configuration V6
-===================================
-This configuration merges Peking_1/2/3 into a single "Peking" site for proper LOSO validation.
 
-Key Changes from V5:
-- Peking_1/2/3 merged into "Peking" (5 sites instead of 7)
-- Removed 2x oversampling (back to 1x for faster training)
-- Batch size reverted to 32 (matches base study)
-- Keep class_weights=[1.0, 4.0] and label_smoothing=0.05
-
-Rationale:
-- Peking_1 has 0 ADHD subjects, breaking test metrics when used as test fold
-- Merging gives: Peking = 191 HC + 54 ADHD (sufficient for evaluation)
-- 5 proper LOSO folds: NYU, Peking, NeuroIMAGE, KKI, OHSU
-"""
 
 MODEL_CONFIG_BASELINE = {
     # Model Architecture

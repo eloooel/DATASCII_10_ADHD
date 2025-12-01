@@ -1,25 +1,4 @@
-"""
-Baseline-Accurate Configuration V7 - True Baseline Replication
-================================================================
-This configuration exactly replicates the base study methodology WITHOUT
-any adaptations for class imbalance. This serves as the true baseline to
-demonstrate the impact of severe class imbalance on model performance.
 
-Purpose: Establish baseline performance with base study's exact approach
-Expected: Poor sensitivity (~5-15%) due to 75/25 imbalance
-Use: Compare against v6 to show the value of class weighting adaptation
-
-Key Differences from Base Study:
-- Dataset: 75/25 HC/ADHD (severe imbalance) vs their 53/47 (balanced)
-- Atlas: Schaefer-200 vs AAL-116
-- Sites: Merged Peking vs split Peking_1/2/3
-
-Training Approach: EXACT MATCH to base study
-- Balanced mini-batch sampling via WeightedRandomSampler
-- Binary cross-entropy loss (NO class weights, NO label smoothing)
-- Batch size 32 (matches base study)
-- Standard Adam optimizer
-"""
 
 MODEL_CONFIG_BASELINE = {
     # Model Architecture

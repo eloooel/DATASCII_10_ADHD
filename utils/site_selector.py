@@ -112,7 +112,7 @@ class SiteSelector:
         # Filter data
         filtered_data = data[data[site_column].isin(selected_sites)].copy()
         
-        print(f"\n📊 Site Configuration: {config_name}")
+        print(f"\nConfiguration: Site Configuration: {config_name}")
         print(f"   Selected sites: {', '.join(selected_sites)}")
         print(f"   Total subjects: {len(filtered_data)}")
         
@@ -185,7 +185,7 @@ class SiteSelector:
         with open(config_info_path, 'w') as f:
             json.dump(config_info, f, indent=2)
         
-        print(f"\n✅ Experiment configurations created:")
+        print(f"\nSuccess: Experiment configurations created:")
         print(f"   All sites: {all_sites_path}")
         print(f"   Baseline: {baseline_path}")
         print(f"   Config info: {config_info_path}")
@@ -244,7 +244,7 @@ def create_site_filtered_datasets(
         Dictionary of configuration paths
     """
     print("\n" + "="*70)
-    print("🌍 CREATING SITE-FILTERED EXPERIMENTAL CONFIGURATIONS")
+    print("CREATING SITE-FILTERED EXPERIMENTAL CONFIGURATIONS")
     print("="*70)
     
     # Initialize selector
@@ -271,6 +271,6 @@ def create_site_filtered_datasets(
         output_dir=output_dir
     )
     
-    print("\n✅ Site-filtered datasets ready for experiments")
+    print("\nSuccess: Site-filtered datasets ready for experiments")
     
     return configs

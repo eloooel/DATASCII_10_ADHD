@@ -1,25 +1,4 @@
-"""
-Baseline-Accurate Configuration V8 - Aggressive Class Weighting
-================================================================
-This configuration uses more aggressive class weighting to further improve
-minority class (ADHD) detection compared to v6.
 
-Purpose: Test if higher class weights can improve sensitivity beyond v6's 45%
-Expected: 50-60% sensitivity, but may sacrifice specificity
-Use: Compare against v6 to find optimal class weight balance
-
-Key Changes from V6:
-- Increased class weights from [1.0, 4.0] to [1.0, 5.0]
-- 5x emphasis on ADHD class vs HC class in loss function
-- All other settings identical to v6
-
-Training Approach:
-- Balanced mini-batch sampling via WeightedRandomSampler
-- Binary cross-entropy with class_weights=[1.0, 5.0]
-- Label smoothing 0.05
-- Batch size 32
-- 5 merged sites (Peking_1/2/3 combined)
-"""
 
 MODEL_CONFIG_BASELINE = {
     # Model Architecture
@@ -32,6 +11,7 @@ MODEL_CONFIG_BASELINE = {
     'gnn_config': {
         'hidden_dims': [128, 64, 32],
         'dropout': 0.3,
+
         'pool_ratios': [0.8, 0.6]
     },
     

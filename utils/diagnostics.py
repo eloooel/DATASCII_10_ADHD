@@ -50,14 +50,14 @@ def check_missing_subjects(metadata_path='data/raw/subjects_metadata.csv',
             })
     
     if missing_subjects:
-        print(f"\n⚠️  Found {len(missing_subjects)} missing subjects:")
+        print(f"\nWarning: Found {len(missing_subjects)} missing subjects:")
         df = pd.DataFrame(missing_subjects)
         print(df.to_string(index=False))
         
         print(f"\nBy diagnosis:")
         print(df['diagnosis'].value_counts())
     else:
-        print("\n✅ All subjects in metadata have features!")
+        print("\nSuccess: All subjects in metadata have features!")
     
     return missing_subjects
 
@@ -107,7 +107,7 @@ def regenerate_feature_manifest(metadata_path='data/raw/subjects_metadata.csv',
     manifest_df = pd.DataFrame(manifest_data)
     manifest_df.to_csv(output_path, index=False)
     
-    print(f"\n📊 Feature Manifest Updated:")
+    print(f"\nSummary: Feature Manifest Updated:")
     print(f"  Complete: {len(manifest_df)} subjects")
     print(f"  Missing: {missing_count} subjects")
     print(f"\n📈 Diagnosis Distribution:")
@@ -137,12 +137,12 @@ def analyze_dataset_stats(manifest_path='data/features/feature_manifest.csv'):
     adhd = (df['diagnosis'] == 1).sum()
     control = (df['diagnosis'] == 0).sum()
     
-    print(f"\n📊 Overall:")
+    print(f"\nSummary: Overall:")
     print(f"  Total subjects: {total}")
     print(f"  ADHD: {adhd} ({100*adhd/total:.1f}%)")
     print(f"  Control: {control} ({100*control/total:.1f}%)")
     
-    print(f"\n🌍 By Site:")
+    print(f"\nBy Site:")
     site_stats = df.groupby('site')['diagnosis'].agg([
         ('total', 'count'),
         ('ADHD', lambda x: (x==1).sum()),
@@ -150,7 +150,7 @@ def analyze_dataset_stats(manifest_path='data/features/feature_manifest.csv'):
     ])
     print(site_stats)
     
-    print(f"\n⚖️ Class Balance:")
+    print(f"\nClass Balance:")
     print(f"  ADHD/Total ratio: {adhd/total:.3f}")
     print(f"  Imbalance ratio: {max(adhd, control)/min(adhd, control):.2f}:1")
     
@@ -177,7 +177,7 @@ def retry_failed_subjects(subject_ids, manifest_path='data/raw/subjects_metadata
     manifest_df = pd.read_csv(manifest_path)
     subject_ids = list(set(subject_ids))  # Remove duplicates
     
-    print(f"\n🎯 Target subjects ({len(subject_ids)}):")
+    print(f"\nTarget subjects ({len(subject_ids)}):")
     for subj_id in subject_ids:
         print(f"   - {subj_id}")
     
@@ -187,25 +187,25 @@ def retry_failed_subjects(subject_ids, manifest_path='data/raw/subjects_metadata
         match = manifest_df[manifest_df['subject_id'] == subj_id]
         
         if match.empty:
-            print(f"\n[{i}/{len(subject_ids)}] ❌ {subj_id}: Not in metadata")
+            print(f"\n[{i}/{len(subject_ids)}] Not in metadata: {subj_id}")
             continue
         
         row = match.iloc[0].to_dict()
         row['out_dir'] = output_dir
         site = row.get('site', 'unknown')
         
-        print(f"\n[{i}/{len(subject_ids)}] 🔄 Processing {subj_id} ({site})")
+        print(f"\n[{i}/{len(subject_ids)}] Processing {subj_id} ({site})")
         
         try:
             result = _process_subject(row)
             results.append(result)
             
             if result['status'] == 'success':
-                print(f"   ✅ SUCCESS")
+                print(f"   SUCCESS")
             else:
-                print(f"   ❌ FAILED: {result.get('error', 'Unknown')[:60]}")
+                print(f"   FAILED: {result.get('error', 'Unknown')[:60]}")
         except Exception as e:
-            print(f"   ❌ EXCEPTION: {str(e)[:60]}")
+            print(f"   EXCEPTION: {str(e)[:60]}")
             results.append({
                 'status': 'failed',
                 'subject_id': subj_id,
@@ -215,7 +215,7 @@ def retry_failed_subjects(subject_ids, manifest_path='data/raw/subjects_metadata
         gc.collect()
     
     success = sum(1 for r in results if r['status'] == 'success')
-    print(f"\n📊 Results: {success}/{len(results)} successful")
+    print(f"\nSummary: Results: {success}/{len(results)} successful")
     
     return results
 

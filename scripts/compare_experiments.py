@@ -47,7 +47,7 @@ class ExperimentComparer:
             'results_path': str(results_path)
         }
         
-        print(f"✅ Added experiment: {name}")
+        print(f"Added experiment: {name}")
     
     def add_experiment_from_dict(
         self,
@@ -69,7 +69,7 @@ class ExperimentComparer:
             'results_path': 'in-memory'
         }
         
-        print(f"✅ Added experiment: {name}")
+        print(f"Added experiment: {name}")
     
     def create_comparison_table(
         self,
@@ -102,7 +102,7 @@ class ExperimentComparer:
             elif 'validation_results' in results and 'summary' in results['validation_results']:
                 summary = results['validation_results']['summary']
             else:
-                print(f"⚠️  Warning: No summary found for {exp_name}")
+                print(f"Warning: No summary found for {exp_name}")
                 continue
             
             row = {'Experiment': exp_name}
@@ -253,7 +253,7 @@ class ExperimentComparer:
         stats_path = self.output_dir / f'statistical_comparison_vs_{baseline_experiment}.json'
         with open(stats_path, 'w') as f:
             json.dump(comparisons, f, indent=2)
-        print(f"📊 Statistical comparison saved to: {stats_path}")
+        print(f"Summary: Statistical comparison saved to: {stats_path}")
         
         return comparisons
     
@@ -499,7 +499,7 @@ class ExperimentComparer:
         # Save
         csv_path = self.output_dir / 'ablation_summary.csv'
         df.to_csv(csv_path, index=False)
-        print(f"📊 Ablation summary saved to: {csv_path}")
+        print(f"Summary: Ablation summary saved to: {csv_path}")
         
         # LaTeX version
         latex_path = self.output_dir / 'ablation_summary.tex'
@@ -526,7 +526,7 @@ class ExperimentComparer:
                         site_data[site][exp_name] = fold['test_metrics'].get('accuracy', 0)
         
         if not site_data:
-            print("⚠️  No site-specific results found (LOSO validation required)")
+            print("Warning: No site-specific results found (LOSO validation required)")
             return pd.DataFrame()
         
         # Create DataFrame
@@ -541,7 +541,7 @@ class ExperimentComparer:
         # Save
         csv_path = self.output_dir / 'site_comparison.csv'
         df.to_csv(csv_path, index=False)
-        print(f"📊 Site comparison saved to: {csv_path}")
+        print(f"Summary: Site comparison saved to: {csv_path}")
         
         return df
     
@@ -556,7 +556,7 @@ class ExperimentComparer:
             baseline_experiment: Optional baseline for statistical tests
         """
         print("\n" + "="*70)
-        print("📊 GENERATING COMPREHENSIVE EXPERIMENT COMPARISON REPORT")
+        print("GENERATING COMPREHENSIVE EXPERIMENT COMPARISON REPORT")
         print("="*70)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -627,7 +627,7 @@ class ExperimentComparer:
                 mcnemar_df.to_csv(report_dir / 'mcnemar_tests.csv', index=False)
                 print(f"   Saved McNemar tests to: {report_dir / 'mcnemar_tests.csv'}")
             else:
-                print(f"   ⚠️  No McNemar tests available (predictions not found)")
+                print(f"   Warning: No McNemar tests available (predictions not found)")
                 mcnemar_df = None
         
         # 3. Ablation summary (if applicable)
@@ -636,7 +636,7 @@ class ExperimentComparer:
             ablation_df = self.create_ablation_summary()
             ablation_df.to_csv(report_dir / 'ablation_summary.csv', index=False)
         except Exception as e:
-            print(f"   ⚠️  Could not create ablation summary: {e}")
+            print(f"   Warning: Could not create ablation summary: {e}")
         
         # 4. Site comparison (if LOSO)
         print("\n4️⃣  Creating site comparison...")
@@ -679,7 +679,7 @@ class ExperimentComparer:
                     f.write("-" * 70 + "\n")
                     f.write(mcnemar_df.to_string(index=False))
         
-        print(f"\n✅ Full report generated in: {report_dir}")
+        print(f"\nSuccess: Full report generated in: {report_dir}")
         print(f"\nMain files:")
         print(f"  - comparison_table.csv")
         print(f"  - statistical_tests.csv (paired t-tests)")

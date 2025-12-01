@@ -133,7 +133,7 @@ class OptimizedTrainer:
                 if self.warmup_count >= self.warmup_steps:
                     self.opt_manager.neuron_preloader.finalize_warmup()
                     self.is_warmed_up = True
-                    print("✓ Neuron preloading warmup complete")
+                    print("Success: Neuron preloading warmup complete")
         
         # Compute metrics
         with torch.no_grad():
@@ -197,13 +197,13 @@ class OptimizedTrainer:
             **kwargs
         }
         torch.save(checkpoint, path)
-        print(f"✓ Checkpoint saved to {path}")
+        print(f"Success: Checkpoint saved to {path}")
     
     def load_checkpoint(self, path: Path) -> Dict:
         """Load model checkpoint"""
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
-        print(f"✓ Checkpoint loaded from {path}")
+        print(f"Success: Checkpoint loaded from {path}")
         return checkpoint
     
     def print_stats(self):
@@ -300,10 +300,10 @@ if __name__ == "__main__":
         optimization_level='high'
     )
     
-    print("✓ Optimized trainer created")
+    print("Success: Optimized trainer created")
     print("\nOptimization features:")
-    print("  - Active Gradient Offloading: ✓")
-    print("  - Holistic Activation Swapping: ✓")
-    print("  - Hybrid Attention Blocks: ✓")
-    print("  - Hot/Cold Neuron Preloading: ✓")
-    print("  - Dynamic Layer Gating: ✓")
+    print("  - Active Gradient Offloading: Enabled")
+    print("  - Holistic Activation Swapping: Enabled")
+    print("  - Hybrid Attention Blocks: Enabled")
+    print("  - Hot/Cold Neuron Preloading: Enabled")
+    print("  - Dynamic Layer Gating: Enabled")

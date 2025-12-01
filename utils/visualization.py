@@ -573,7 +573,7 @@ def create_visualization_report(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"\n📊 Creating visualization report for: {experiment_name}")
+    print(f"\nGenerating: Creating visualization report for: {experiment_name}")
     
     # 1. Confusion Matrix
     if 'fold_results' in results:
@@ -653,7 +653,7 @@ def create_visualization_report(
                 )
                 plt.close()
     
-    print(f"✅ Visualization report saved to: {output_dir}")
+    print(f"Success: Visualization report saved to: {output_dir}")
 
 
 if __name__ == '__main__':

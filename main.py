@@ -214,8 +214,8 @@ def run_feature_extraction(metadata_out: Path, preproc_out: Path,
         # Debugging output
         print(f"Sites in metadata: {metadata['site'].value_counts()}")
 
-        # ✅ FILTER to only subjects with preprocessing files
-        print("\n🔍 Filtering to subjects with preprocessing files...")
+        # FILTER to only subjects with preprocessing files
+        print("\nFiltering to subjects with preprocessing files...")
         preprocessed_subjects = []
         missing_preprocessing = []
         

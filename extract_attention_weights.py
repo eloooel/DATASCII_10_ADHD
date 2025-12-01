@@ -201,7 +201,7 @@ def train_single_fold_for_attention(fc_matrices, roi_timeseries, labels, sites,
         
         print(f"Epoch {epoch+1}/5: Loss = {epoch_loss/len(train_loader):.4f}")
     
-    print("✓ Training complete")
+    print("Success: Training complete")
     return model, test_idx
 
 
@@ -265,12 +265,12 @@ def main():
         site=sites[subject_idx]
     )
     
-    print(f"\n✓ Attention weights saved to: {output_dir / 'attention_weights.npz'}")
+    print(f"\nSuccess: Attention weights saved to: {output_dir / 'attention_weights.npz'}")
     
     # Also save the subject's FC matrix for connectivity visualization
     subject_fc = fc_matrices[subject_idx]
     np.save(output_dir / 'example_fc_matrix.npy', subject_fc)
-    print(f"✓ FC matrix saved to: {output_dir / 'example_fc_matrix.npy'}")
+    print(f"Success: FC matrix saved to: {output_dir / 'example_fc_matrix.npy'}")
     
     # Save metadata
     metadata = {
@@ -285,7 +285,7 @@ def main():
     with open(output_dir / 'metadata.json', 'w') as f:
         json.dump(metadata, f, indent=2)
     
-    print(f"✓ Metadata saved to: {output_dir / 'metadata.json'}")
+    print(f"Success: Metadata saved to: {output_dir / 'metadata.json'}")
     
     print("\n" + "="*80)
     print("EXTRACTION COMPLETE")

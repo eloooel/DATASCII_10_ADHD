@@ -37,14 +37,14 @@ def retry_failed_preprocessing(
     output_base = Path(output_dir)
     
     # Step 1: Identify failed subjects
-    print("🔍 Identifying failed subjects...")
+    print("Identifying failed subjects...")
     failed_subjects = identify_failed_subjects(output_base)
     
     if not failed_subjects:
-        print("✅ No failed subjects found!")
+        print("Success: No failed subjects found!")
         return pd.DataFrame()
     
-    print(f"\n❌ Found {len(failed_subjects)} failed subjects:")
+    print(f"\nFailed: Found {len(failed_subjects)} failed subjects:")
     for subj in failed_subjects:
         print(f"  - {subj['subject_id']} ({subj['site']}): {subj['reason']}")
     
@@ -58,7 +58,7 @@ def retry_failed_preprocessing(
         match = manifest_df[manifest_df['subject_id'] == failed['subject_id']]
         
         if match.empty:
-            print(f"⚠️ Warning: {failed['subject_id']} not found in manifest")
+            print(f"Warning: {failed['subject_id']} not found in manifest")
             continue
         
         row = match.iloc[0].to_dict()
@@ -72,13 +72,13 @@ def retry_failed_preprocessing(
         retry_list.append(row)
     
     if not retry_list:
-        print("❌ No subjects to retry (couldn't match manifest)")
+        print("Error: No subjects to retry (couldn't match manifest)")
         return pd.DataFrame()
     
-    print(f"\n🔄 Retrying {len(retry_list)} subjects...")
+    print(f"\nRetrying {len(retry_list)} subjects...")
     
     # Step 4: Reprocess with parallel execution
-    # ✅ FIX: Check if n_jobs > 1 for parallel, otherwise sequential
+    # FIX: Check if n_jobs > 1 for parallel, otherwise sequential
     if n_jobs > 1:
         results = run_parallel(_process_subject, retry_list, desc=f"Retrying {len(retry_list)} subjects")
     else:
@@ -98,8 +98,8 @@ def retry_failed_preprocessing(
     
     print(f"\n{'='*60}")
     print(f"Retry Summary:")
-    print(f"  ✅ Successful: {success_count}/{len(retry_list)}")
-    print(f"  ❌ Failed: {failed_count}/{len(retry_list)}")
+    print(f"  Success: Successful: {success_count}/{len(retry_list)}")
+    print(f"  Failed: Failed: {failed_count}/{len(retry_list)}")
     
     if failed_count > 0:
         print(f"\nStill failing:")
@@ -129,4 +129,4 @@ if __name__ == "__main__":
     # Save retry results
     results_path = Path(args.output) / "retry_results.csv"
     results.to_csv(results_path, index=False)
-    print(f"\n💾 Retry results saved to: {results_path}")
+    print(f"\nSaved: Retry results saved to: {results_path}")

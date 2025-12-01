@@ -97,16 +97,16 @@ def main():
     
     for model_name, model_path in models.items():
         if model_path.exists():
-            print(f"\n📊 Extracting from {model_name}...")
+            print(f"\nExtracting from {model_name}...")
             predictions = extract_predictions_from_results(model_path, model_name)
             if predictions:
                 model_predictions[model_name] = predictions
                 all_predictions.extend(predictions)
-                print(f"   ✓ Extracted {len(predictions)} predictions")
+                print(f"   Extracted {len(predictions)} predictions")
             else:
-                print(f"   ⚠️  No predictions found")
+                print(f"   No predictions found")
         else:
-            print(f"\n⚠️  Not found: {model_path}")
+            print(f"\nNot found: {model_path}")
     
     # Save predictions
     if all_predictions:
@@ -116,7 +116,7 @@ def main():
         # Save combined predictions
         combined_path = output_dir / "all_model_predictions.csv"
         save_to_csv(all_predictions, combined_path, fieldnames)
-        print(f"\n✅ Combined predictions saved to: {combined_path}")
+        print(f"\nSuccess: Combined predictions saved to: {combined_path}")
         print(f"   Total predictions: {len(all_predictions)}")
         
         # Save per-model predictions
@@ -163,10 +163,10 @@ def main():
                 f.write(f"  ADHD samples: {adhd_samples}\n")
                 f.write(f"  HC samples: {hc_samples}\n\n")
         
-        print(f"\n📊 Summary saved to: {summary_path}")
+        print(f"\nSummary: Summary saved to: {summary_path}")
         
     else:
-        print("\n❌ No predictions found in any model")
+        print("\nError: No predictions found in any model")
 
 
 if __name__ == '__main__':
