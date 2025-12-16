@@ -24,15 +24,12 @@ class CrossModalFusion(nn.Module):
         self.stan_dim = stan_dim
         self.fusion_dim = fusion_dim
         
-        # Project embeddings to common dimension
         self.gnn_proj = nn.Linear(gnn_dim, fusion_dim)
         self.stan_proj = nn.Linear(stan_dim, fusion_dim)
         
-        # Cross-attention mechanism
         self.cross_attn_gnn = nn.MultiheadAttention(fusion_dim, num_heads=4, dropout=dropout)
         self.cross_attn_stan = nn.MultiheadAttention(fusion_dim, num_heads=4, dropout=dropout)
         
-        # Fusion layers
         self.fusion_layers = nn.Sequential(
             nn.Linear(fusion_dim * 4, fusion_dim * 2),  # Concatenated + cross-attended
             nn.ReLU(),
@@ -44,15 +41,13 @@ class CrossModalFusion(nn.Module):
         )
         
     def forward(self, gnn_emb: torch.Tensor, stan_emb: torch.Tensor) -> torch.Tensor:
-        # Project to common dimension
-        gnn_proj = self.gnn_proj(gnn_emb).unsqueeze(0)  # (1, batch, dim)
-        stan_proj = self.stan_proj(stan_emb).unsqueeze(0)  # (1, batch, dim)
+        gnn_proj = self.gnn_proj(gnn_emb).unsqueeze(0)
+        stan_proj = self.stan_proj(stan_emb).unsqueeze(0)
         
         # Cross-attention
         gnn_cross, _ = self.cross_attn_gnn(gnn_proj, stan_proj, stan_proj)
         stan_cross, _ = self.cross_attn_stan(stan_proj, gnn_proj, gnn_proj)
         
-        # Remove sequence dimension
         gnn_cross = gnn_cross.squeeze(0)
         stan_cross = stan_cross.squeeze(0)
         

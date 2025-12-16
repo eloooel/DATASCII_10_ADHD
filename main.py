@@ -32,7 +32,6 @@ from training import TrainingOptimizationModule
 from evaluation import ADHDModelEvaluator
 from typing import Dict, Any, List
 
-# --- Configuration ---
 RAW_DIR = Path("./data/raw")
 PREPROC_OUT = Path("./data/preprocessed")
 FEATURES_OUT = Path("./data/features")
@@ -89,7 +88,6 @@ TRAINING_CONFIG = {
     'run_loso': True,
     'output_dir': str(TRAINED_OUT / "checkpoints"),
 
-    # Memory optimization settings
     'use_amp': True,
     'use_gradient_checkpointing': True,
     'gradient_accumulation_steps': 8
@@ -97,7 +95,6 @@ TRAINING_CONFIG = {
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# --- Pipeline stages ---
 def ensure_metadata(data_dir: Path, metadata_out: Path):
     """Ensure the subjects_metadata.csv exists, otherwise generate it"""
     if not metadata_out.exists():

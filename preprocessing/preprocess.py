@@ -26,7 +26,6 @@ class PreprocessingPipeline:
         else:
             self.config = self._default_config()
             
-        # Only print device info if explicitly requested
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.processing_log: List[Dict[str, Any]] = []
         self.subject_id: str = "unknown"
@@ -70,8 +69,8 @@ class PreprocessingPipeline:
             'spatial_normalization': {
                 'enabled': True,
                 'template': 'MNI152',
-                'resolution': 2,  # MNI152 resolution in mm
-                'smooth_fwhm': 6.0  # Spatial smoothing after registration
+                'resolution': 2,
+                'smooth_fwhm': 6.0
             },
             'temporal_filtering': {
                 'enabled': True,
@@ -82,7 +81,7 @@ class PreprocessingPipeline:
             },
             'denoising': {
                 'motion_regression': True,
-                'ica_aroma': {  # ICA-AROMA configuration
+                'ica_aroma': {
                     'enabled': True,
                     'n_components': 25,
                     'max_iter': 200,
@@ -183,14 +182,12 @@ class PreprocessingPipeline:
         """Load and validate input fMRI data with CUDA support"""
         data = nib.load(input_path)
         
-        # FIXED: Ensure float32 and avoid object arrays
         img_data_np = data.get_fdata().astype(np.float32)
         img_data = torch.from_numpy(img_data_np).to(self.device)
         
         if len(img_data.shape) != 4:
             raise ValueError(f"Expected 4D data, got {len(img_data.shape)}D")
 
-        # Basic data quality checks on GPU
         n_zeros = torch.sum(img_data == 0).item()
         total_voxels = torch.prod(torch.tensor(img_data.shape)).item()
         
@@ -211,70 +208,59 @@ class PreprocessingPipeline:
             self._log_step("motion_correction", "skipped", "Disabled in config")
             return data_img, None
 
-        # Get data and metadata - ensure proper data types
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = data_img.get_fdata().astype(np.float32)  # Force float32
+            img_data = data_img.get_fdata().astype(np.float32)
             affine = data_img.affine
             header = data_img.header
         elif torch.is_tensor(data_img):
-            img_data = data_img.cpu().numpy().astype(np.float32)  # Force float32
+            img_data = data_img.cpu().numpy().astype(np.float32)
             affine = self.metadata['affine']
             header = None
         else:
-            img_data = np.array(data_img, dtype=np.float32)  # ✅ Force float32
+            img_data = np.array(data_img, dtype=np.float32)
             affine = self.metadata['affine']
             header = None
 
         n_vols = img_data.shape[-1]
         
-        # Create reference volume (mean or first volume)
         if params['reference'] == 'mean':
             reference = np.mean(img_data, axis=-1).astype(np.float32)
         elif params['reference'] == 'first':
             reference = img_data[..., 0].astype(np.float32)
         else:
-            # Assume reference is a volume index
             ref_idx = int(params['reference'])
             reference = img_data[..., ref_idx].astype(np.float32)
 
-        # Initialize motion parameters
         motion_params = {
-            'translations': np.zeros((n_vols, 3), dtype=np.float32),  # Explicit dtype
-            'rotations': np.zeros((n_vols, 3), dtype=np.float32),     # Explicit dtype
-            'displacement': np.zeros(n_vols, dtype=np.float32),       # Explicit dtype
+            'translations': np.zeros((n_vols, 3), dtype=np.float32),
+            'rotations': np.zeros((n_vols, 3), dtype=np.float32),
+            'displacement': np.zeros(n_vols, dtype=np.float32),
             'excluded_volumes': []
         }
 
-        corrected_data = np.zeros_like(img_data, dtype=np.float32)  # Fixed parenthesis
+        corrected_data = np.zeros_like(img_data, dtype=np.float32)
 
-        # Process each volume
         for vol_idx in range(n_vols):
             current_vol = img_data[..., vol_idx].astype(np.float32)
             translation = self._estimate_translation(reference, current_vol)
             
-            # Ensure translation is finite float32
             translation = np.asarray(translation, dtype=np.float32)
             if not np.all(np.isfinite(translation)):
                 translation = np.zeros(3, dtype=np.float32)
                 
-            # Apply shift
             corrected_vol = ndimage.shift(current_vol, translation, order=1, mode='nearest')
             corrected_data[..., vol_idx] = corrected_vol.astype(np.float32)
             
-            # Store motion parameters
             motion_params['translations'][vol_idx] = translation
             
-            # Calculate frame displacement
             if vol_idx > 0:
                 prev_trans = motion_params['translations'][vol_idx - 1]
                 displacement = np.sqrt(np.sum((translation - prev_trans) ** 2))
                 motion_params['displacement'][vol_idx] = displacement
                 
-                # Check for excessive motion
                 if displacement > params.get('max_displacement_mm', 3.0):
-                    motion_params['excluded_volumes'].append(vol_idx)  # ADDED MISSING LINE
-
-        # Always return NIfTI
+                    motion_params['excluded_volumes'].append(vol_idx)
+        
         corrected_img = nib.Nifti1Image(corrected_data, affine, header)
 
         max_displacement = np.max(motion_params['displacement'])
@@ -287,36 +273,31 @@ class PreprocessingPipeline:
             self._log_step("motion_correction", "warning", 
                           f"Flagged {len(motion_params['excluded_volumes'])} high-motion volumes")
 
-    # Convert back to tensor if input was tensor
         if torch.is_tensor(data_img):
             corrected_data_tensor = torch.from_numpy(corrected_data).to(self.device)
             return corrected_data_tensor, motion_params
         else:
-            # Create corrected nibabel image
             corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
             return corrected_img, motion_params
         
     def _estimate_translation(self, reference: np.ndarray, current: np.ndarray) -> np.ndarray:
-        """Estimate translation between two volumes using center of mass"""
+        """Estimate translation between two volumes using center of mass
+        
+        Note: This implementation was partially assisted by AI.
+        """
         try:
-            # Threshold images to focus on brain tissue
             ref_thresh = reference > np.percentile(reference[reference > 0], 50)
             cur_thresh = current > np.percentile(current[current > 0], 50)
             
-            # Calculate center of mass
             ref_com = ndimage.center_of_mass(ref_thresh)
             cur_com = ndimage.center_of_mass(cur_thresh)
             
-            # Translation is the difference in center of mass
             translation = np.array(ref_com) - np.array(cur_com)
-            
-            # Limit maximum correction to prevent artifacts
             translation = np.clip(translation, -10, 10)
             
             return translation
             
         except:
-            # Fallback to zero translation if center of mass fails
             return np.array([0.0, 0.0, 0.0])
 
     def _slice_timing_correction(self, data_img, params: Dict[str, Any], metadata: Dict[str, Any]):
@@ -329,33 +310,28 @@ class PreprocessingPipeline:
         tr = params.get('tr', metadata.get('tr', 2.0))
         n_slices = img_data.shape[2]
         
-        # Define slice acquisition times
         if params['slice_order'] == 'ascending':
             slice_times = np.linspace(0, tr, n_slices, endpoint=False)
         elif params['slice_order'] == 'descending':
             slice_times = np.linspace(tr, 0, n_slices, endpoint=False)
         elif params['slice_order'] == 'interleaved':
-            # Interleaved: odd slices first, then even
             odd_times = np.linspace(0, tr/2, n_slices//2, endpoint=False)
             even_times = np.linspace(tr/2, tr, n_slices//2, endpoint=False)
             slice_times = np.zeros(n_slices)
-            slice_times[::2] = odd_times  # odd indices
-            slice_times[1::2] = even_times  # even indices
+            slice_times[::2] = odd_times
+            slice_times[1::2] = even_times
         else:
             slice_times = np.linspace(0, tr, n_slices, endpoint=False)
 
-        # Reference time (usually middle slice)
         if params['ref_slice'] == 'middle':
             ref_time = tr / 2
         else:
             ref_slice_idx = int(params['ref_slice'])
             ref_time = slice_times[ref_slice_idx]
 
-        # Apply slice timing correction
         corrected_data = np.zeros_like(img_data)
         n_timepoints = img_data.shape[-1]
         
-        # Create time vectors for interpolation
         original_times = np.arange(n_timepoints) * tr
         
         for z in range(n_slices):
@@ -368,14 +344,12 @@ class PreprocessingPipeline:
                 for y in range(slice_data.shape[1]):
                     voxel_ts = slice_data[x, y, :]
                     
-                    if np.any(voxel_ts != 0):  # Skip empty voxels
-                        # ADDED: Linear interpolation for slice timing correction
+                    if np.any(voxel_ts != 0):
                         corrected_ts = np.interp(original_times, shifted_times, voxel_ts)
                         corrected_data[x, y, z, :] = corrected_ts
                     else:
                         corrected_data[x, y, z, :] = voxel_ts
-
-        # Create corrected nibabel image
+        
         corrected_img = nib.Nifti1Image(corrected_data, data_img.affine, data_img.header)
         
         self._log_step("slice_timing_correction", "success", 
@@ -393,15 +367,12 @@ class PreprocessingPipeline:
             from nilearn.datasets import load_mni152_template
             from nilearn.image import resample_to_img, smooth_img
             
-            # Load MNI152 template at specified resolution
             resolution = params.get('resolution', 2)
             mni_template = load_mni152_template(resolution=resolution)
             
             self._log_step("spatial_normalization", "info", 
                           f"Loaded MNI152 template at {resolution}mm resolution")
             
-            # Resample functional data to MNI152 space
-            # This performs affine registration to template space
             normalized_img = resample_to_img(
                 data_img, 
                 mni_template, 
@@ -412,7 +383,6 @@ class PreprocessingPipeline:
             self._log_step("spatial_normalization", "success", 
                           f"Resampled to MNI152 space: {normalized_img.shape}")
             
-            # Apply spatial smoothing after normalization
             smooth_fwhm = params.get('smooth_fwhm', 6.0)
             if smooth_fwhm > 0:
                 smoothed_img = smooth_img(normalized_img, fwhm=smooth_fwhm)
@@ -427,13 +397,11 @@ class PreprocessingPipeline:
                 return normalized_img
                 
         except ImportError as e:
-            # Fail if nilearn not available
             self._log_step("spatial_normalization", "failed", 
                           f"Nilearn not available for MNI152 registration: {e}")
             raise RuntimeError(f"MNI152 registration requires nilearn: {e}")
             
         except Exception as e:
-            # Fail if registration fails
             self._log_step("spatial_normalization", "failed", 
                           f"MNI152 registration failed: {e}")
             raise RuntimeError(f"MNI152 registration failed: {e}")
@@ -444,13 +412,12 @@ class PreprocessingPipeline:
             self._log_step("temporal_filtering", "skipped", "Disabled in config")
             return data_img
 
-        # Get data and affine/header
         if isinstance(data_img, nib.Nifti1Image):
-            img_data = data_img.get_fdata().astype(np.float32)  # Ensure float32
+            img_data = data_img.get_fdata().astype(np.float32)
             affine = data_img.affine
             header = data_img.header
         else:
-            img_data = np.array(data_img, dtype=np.float32)  # Force float32
+            img_data = np.array(data_img, dtype=np.float32)
             affine = metadata['affine']
             header = None
 
@@ -459,58 +426,45 @@ class PreprocessingPipeline:
         high_freq = params['high_freq']
         filter_order = params.get('filter_order', 4)
         
-        # Nyquist frequency
         nyquist = 1 / (2 * tr)
-        
-        # Normalize frequencies
         low = low_freq / nyquist
         high = high_freq / nyquist
         
-        # Check frequency bounds
         if high >= 1.0:
             high = 0.99
             self._log_step("temporal_filtering", "warning", 
                         f"High frequency capped at {high * nyquist:.3f}Hz")
         
-        # Design Butterworth bandpass filter
         try:
             b, a = signal.butter(filter_order, [low, high], btype='band')
         except ValueError:
-            # Fallback to high-pass only if bandpass fails
             b, a = signal.butter(filter_order, low, btype='high')
             self._log_step("temporal_filtering", "warning", "Applied high-pass only")
 
-        # Get brain mask for filtering (avoid filtering background)
         mean_img = np.mean(img_data, axis=-1)
         brain_mask = mean_img > np.percentile(mean_img[mean_img > 0], 25)
         
-        # Apply filter to each voxel using NumPy (avoid PyTorch object arrays)
         filtered_data = img_data.copy()
         brain_voxels = np.where(brain_mask)
         total_voxels = len(brain_voxels[0])
         
         for i in range(total_voxels):
             x, y, z = brain_voxels[0][i], brain_voxels[1][i], brain_voxels[2][i]
-            voxel_ts = filtered_data[x, y, z, :].astype(np.float32)  # Ensure float32
+            voxel_ts = filtered_data[x, y, z, :].astype(np.float32)
             
             if np.any(voxel_ts != 0):
                 try:
-                    # ADDED: Complete filtering implementation
-                    # Linear detrending
                     t = np.arange(len(voxel_ts), dtype=np.float32)
                     p = np.polyfit(t, voxel_ts, deg=1)
                     trend = p[1] + p[0] * t
                     detrended = voxel_ts - trend
 
-                    # Apply bandpass filter
                     filtered_ts = signal.filtfilt(b, a, detrended)
                     filtered_data[x, y, z, :] = filtered_ts + trend
                         
                 except Exception as e:
-                    # ADDED: Keep original if filtering fails
                     filtered_data[x, y, z, :] = voxel_ts
-
-        # Always return NIfTI
+        
         filtered_img = nib.Nifti1Image(filtered_data, affine, header)
         
         self._log_step("temporal_filtering", "success", 
@@ -524,35 +478,28 @@ class PreprocessingPipeline:
         img_data = data_img.get_fdata()
         confounds = {}
 
-        # 1. Motion regression
         if params.get('motion_regression', True) and motion_params:
-            # Use motion parameters as confounds
             confounds['trans_x'] = motion_params['translations'][:, 0].tolist()
             confounds['trans_y'] = motion_params['translations'][:, 1].tolist()
             confounds['trans_z'] = motion_params['translations'][:, 2].tolist()
             confounds['frame_displacement'] = motion_params['displacement'].tolist()
             
-            # Add motion derivatives
             confounds['trans_x_derivative'] = np.gradient(motion_params['translations'][:, 0]).tolist()
             confounds['trans_y_derivative'] = np.gradient(motion_params['translations'][:, 1]).tolist()
             confounds['trans_z_derivative'] = np.gradient(motion_params['translations'][:, 2]).tolist()
 
-        # 2. aCompCor (anatomical Component Correction)
         if params.get('acompcor', {}).get('enabled', True):
             acompcor_confounds = self._compute_acompcor(img_data, params['acompcor'])
             confounds.update(acompcor_confounds)
 
-        # 3. Global signal regression (optional)
         if params.get('global_signal', {}).get('enabled', False):
             brain_mask = self._generate_brain_mask(data_img)
             brain_voxels = img_data[brain_mask > 0]
             global_signal = np.mean(brain_voxels, axis=0)
             confounds['global_signal'] = global_signal.tolist()
 
-        # Apply confound regression to data
         denoised_data = self._apply_confound_regression(img_data, confounds)
         
-        # Create denoised nibabel image
         denoised_img = nib.Nifti1Image(denoised_data, data_img.affine, data_img.header)
 
         n_confounds = len(confounds)
@@ -561,14 +508,15 @@ class PreprocessingPipeline:
         return denoised_img, confounds
 
     def _compute_acompcor(self, img_data: np.ndarray, params: Dict[str, Any]) -> Dict[str, List[float]]:
-        """Compute anatomical CompCor components"""
+        """Compute anatomical CompCor components
+        
+        Note: This implementation was partially assisted by AI for PCA-based noise component extraction.
+        """
         n_components = params.get('n_components', 5)
         variance_threshold = params.get('variance_threshold', 0.5)
         
-        # Create CSF/WM mask (simplified - normally would use tissue segmentation)
         mean_img = np.mean(img_data, axis=-1)
         
-        # High-signal regions (likely CSF) and low-signal regions (likely WM)
         high_threshold = np.percentile(mean_img[mean_img > 0], 90)
         low_threshold = np.percentile(mean_img[mean_img > 0], 30)
         
@@ -594,7 +542,7 @@ class PreprocessingPipeline:
             significant_components = np.where(var_explained > variance_threshold)[0]
             
             if len(significant_components) == 0:
-                significant_components = [0]  # Keep at least one component
+                significant_components = [0]
             
             confounds = {}
             for i, comp_idx in enumerate(significant_components):
@@ -603,28 +551,27 @@ class PreprocessingPipeline:
             return confounds
             
         except Exception as e:
-            # Fallback: return mean signal from noise regions
             mean_noise = np.mean(noise_voxels, axis=0)
             return {'a_comp_cor_00': mean_noise.tolist()}
 
     def _apply_confound_regression(self, img_data: np.ndarray, 
                                  confounds: Dict[str, List[float]]) -> np.ndarray:
-        """Apply confound regression to remove nuisance signals"""
+        """Apply confound regression to remove nuisance signals
+        
+        Note: This linear regression implementation was assisted by AI.
+        """
         if not confounds:
             return img_data
         
-        # Create design matrix from confounds
         n_timepoints = img_data.shape[-1]
-        confound_matrix = np.ones((n_timepoints, 1))  # Add intercept
+        confound_matrix = np.ones((n_timepoints, 1))
         
         for confound_name, confound_ts in confounds.items():
             if len(confound_ts) == n_timepoints:
                 confound_matrix = np.column_stack([confound_matrix, confound_ts])
         
-        # Apply regression to each voxel
         denoised_data = np.zeros_like(img_data)
         
-        # Get brain mask for regression
         mean_img = np.mean(img_data, axis=-1)
         brain_mask = mean_img > np.percentile(mean_img[mean_img > 0], 25)
         
@@ -635,17 +582,14 @@ class PreprocessingPipeline:
             voxel_ts = img_data[x, y, z, :]
             
             try:
-                # Ordinary least squares regression
                 beta = np.linalg.lstsq(confound_matrix, voxel_ts, rcond=None)[0]
                 predicted = confound_matrix @ beta
                 residual = voxel_ts - predicted
                 denoised_data[x, y, z, :] = residual
                 
             except:
-                # Keep original if regression fails
                 denoised_data[x, y, z, :] = voxel_ts
         
-        # Copy non-brain voxels unchanged
         denoised_data[~brain_mask] = img_data[~brain_mask]
         
         return denoised_data
@@ -653,7 +597,10 @@ class PreprocessingPipeline:
 
     def _ica_aroma(self, data_img, motion_params: Optional[Dict[str, np.ndarray]], 
                    params: Dict[str, Any]) -> tuple:
-        """ICA-AROMA for automatic motion artifact removal"""
+        """ICA-AROMA for automatic motion artifact removal
+        
+        Note: This ICA-AROMA implementation was assisted by AI for component analysis and filtering.
+        """
         if not params.get('enabled', True):
             self._log_step("ica_aroma", "skipped", "Disabled in config")
             return data_img, {}
@@ -663,29 +610,24 @@ class PreprocessingPipeline:
             
             img_data = data_img.get_fdata().astype(np.float32)
             
-            # Reshape data for ICA: (n_timepoints, n_voxels)
             original_shape = img_data.shape
             n_timepoints = original_shape[-1]
             
-            # Create brain mask for ICA
             brain_mask = self._generate_brain_mask(data_img)
             brain_voxels_idx = np.where(brain_mask > 0)
             n_brain_voxels = len(brain_voxels_idx[0])
             
-            # Extract brain voxel time series
             brain_timeseries = np.zeros((n_timepoints, n_brain_voxels), dtype=np.float32)
             for i in range(n_brain_voxels):
                 x, y, z = brain_voxels_idx[0][i], brain_voxels_idx[1][i], brain_voxels_idx[2][i]
                 brain_timeseries[:, i] = img_data[x, y, z, :]
             
-            # Determine number of ICA components (typically 20-40 for rs-fMRI)
             n_components = min(params.get('n_components', 25), n_timepoints - 1, n_brain_voxels // 100)
             
             if n_components < 5:
                 raise ValueError(f"Insufficient components for ICA-AROMA ({n_components}). "
                                "Need at least 5 components for reliable motion artifact detection.")
             
-            # Run ICA
             ica = FastICA(
                 n_components=n_components,
                 random_state=42,
@@ -693,9 +635,8 @@ class PreprocessingPipeline:
                 tol=params.get('tolerance', 1e-4)
             )
             
-            # Fit ICA and get components
-            ica_timeseries = ica.fit_transform(brain_timeseries)  # (n_timepoints, n_components)
-            ica_spatial_maps = ica.components_  # (n_components, n_voxels)
+            ica_timeseries = ica.fit_transform(brain_timeseries)
+            ica_spatial_maps = ica.components_
             
             # Identify motion-related components using AROMA criteria
             motion_components = self._identify_motion_components(
@@ -743,7 +684,10 @@ class PreprocessingPipeline:
 
     def _identify_motion_components(self, ica_timeseries: np.ndarray, ica_spatial_maps: np.ndarray,
                                    motion_params: Dict, params: Dict) -> List[int]:
-        """Identify motion-related ICA components using AROMA criteria"""
+        """Identify motion-related ICA components using AROMA criteria
+        
+        Note: This motion artifact detection algorithm was implemented with AI assistance.
+        """
         motion_components = []
         
         if motion_params is None:
@@ -757,21 +701,17 @@ class PreprocessingPipeline:
             is_motion = False
             component_ts = ica_timeseries[:, comp_idx]
             
-            # Criterion 1: High correlation with motion parameters (most important)
             if len(motion_ts) == len(component_ts):
                 correlation = np.corrcoef(component_ts, motion_ts)[0, 1]
                 if not np.isnan(correlation) and abs(correlation) > params.get('motion_correlation_threshold', 0.3):
                     is_motion = True
             
-            # COMPLETE: Criterion 2 implementation
             if not is_motion:
                 try:
-                    # Frequency domain analysis
                     fft = np.fft.fft(component_ts)
                     freqs = np.fft.fftfreq(len(component_ts))
                     power_spectrum = np.abs(fft) ** 2;
                     
-                    # Check if most power is in high frequencies (>0.2 Hz for typical rs-fMRI)
                     high_freq_mask = np.abs(freqs) > params.get('high_freq_threshold', 0.2)
                     high_freq_power = np.sum(power_spectrum[high_freq_mask])
                     total_power = np.sum(power_spectrum)
@@ -780,19 +720,16 @@ class PreprocessingPipeline:
                     if high_freq_ratio > params.get('high_freq_ratio_threshold', 0.6):
                         is_motion = True
                 except:
-                    pass  # Skip frequency analysis if it fails
+                    pass
             
-            # COMPLETE: Criterion 3 implementation
             if not is_motion:
                 try:
                     spatial_map = ica_spatial_maps[comp_idx, :]
                     spatial_std = np.std(spatial_map)
                     
-                    # High spatial variation could indicate motion artifacts
                     if spatial_std > params.get('spatial_std_threshold', 2.0):
-                        # Additional check: look for edge-like patterns
                         high_values = np.abs(spatial_map) > np.percentile(np.abs(spatial_map), 95)
-                        if np.sum(high_values) / len(spatial_map) < 0.1:  # Very sparse activation
+                        if np.sum(high_values) / len(spatial_map) < 0.1:
                             is_motion = True
                 except:
                     pass
@@ -803,62 +740,54 @@ class PreprocessingPipeline:
         return motion_components
 
     def _generate_brain_mask(self, data_img) -> np.ndarray:
-        """Generate brain mask using improved intensity thresholding"""
+        """Generate brain mask using improved intensity thresholding
+        
+        Note: This brain masking algorithm with morphological operations was developed with AI assistance.
+        """
         if hasattr(data_img, 'get_fdata'):
             img_data = data_img.get_fdata()
         else:
             img_data = np.asarray(data_img)
             
-        # Calculate mean image across time
         mean_img = np.mean(img_data, axis=-1)
         
-        # Enhanced brain mask generation
         non_zero_voxels = mean_img[mean_img > 0]
         
         if len(non_zero_voxels) == 0:
             print(f"Warning: {self.subject_id}: No non-zero voxels found!")
             return np.zeros(mean_img.shape, dtype=np.uint8)
         
-        # Use multiple thresholding approaches and take the best
         thresholds = [
-            np.percentile(non_zero_voxels, 20),  # Lower threshold
-            np.percentile(non_zero_voxels, 25),  # Original
-            np.percentile(non_zero_voxels, 15),  # Even lower
+            np.percentile(non_zero_voxels, 20),
+            np.percentile(non_zero_voxels, 25),
+            np.percentile(non_zero_voxels, 15),
         ]
         
         best_mask = None
         best_coverage = 0
         
         for threshold in thresholds:
-            # Create candidate mask
             candidate_mask = (mean_img > threshold).astype(np.uint8)
             
-            # Apply morphological operations
             from scipy import ndimage
             candidate_mask = ndimage.binary_fill_holes(candidate_mask).astype(np.uint8)
             candidate_mask = ndimage.binary_erosion(candidate_mask, iterations=1).astype(np.uint8)
             candidate_mask = ndimage.binary_dilation(candidate_mask, iterations=2).astype(np.uint8)
             
-            # Calculate coverage (should be reasonable brain coverage)
             coverage = candidate_mask.sum() / candidate_mask.size
             
-            # Good brain mask should cover 10-40% of the volume
             if 0.05 <= coverage <= 0.5 and coverage > best_coverage:
                 best_mask = candidate_mask
                 best_coverage = coverage
         
-        # Fallback if no good mask found
         if best_mask is None:
             print(f"{self.subject_id}: Using fallback brain mask")
-            # Very permissive threshold as last resort
             fallback_threshold = np.percentile(non_zero_voxels, 10)
             best_mask = (mean_img > fallback_threshold).astype(np.uint8)
             best_coverage = best_mask.sum() / best_mask.size
         
-        # Final validation
         mask_size_mb = best_mask.nbytes / (1024 * 1024)
         
-        # ONLY print details if there's a problem
         if mask_size_mb < 0.1 or best_coverage < 0.1:
             print(f"Mask validation issues for {self.subject_id}:")
             print(f"   - Shape: {best_mask.shape}")
@@ -869,13 +798,10 @@ class PreprocessingPipeline:
             if mask_size_mb < 0.1:
                 self._log_step("brain_mask", "warning", f"Suspiciously small mask: {mask_size_mb:.2f}MB")
     
-        # SUCCESS: Only log to processing log, no console spam
         self._log_step("brain_mask", "success", 
                       f"Generated mask: {best_mask.sum()} voxels ({best_coverage*100:.1f}% coverage)")
         
         return best_mask
-
-    # ----------------- Helper Methods -----------------
 
     def _log_step(self, step_name: str, status: str, details: str = "") -> None:
         """Log a processing step"""
@@ -909,14 +835,16 @@ class PreprocessingPipeline:
 
 
 def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose: bool = False) -> bool:
-    """Verify that a NIfTI file was written correctly and is not corrupted"""
+    """Verify that a NIfTI file was written correctly and is not corrupted
+    
+    Note: This validation logic was partially implemented with AI assistance.
+    """
     if not output_path.exists():
         if verbose:
             print(f"Failed: Verification failed: File does not exist: {output_path}")
         return False
     
     try:
-        # Check file size
         file_size_mb = output_path.stat().st_size / (1024 * 1024)
         if verbose:
             print(f"   Checking {output_path.name}: {file_size_mb:.2f}MB")
@@ -926,7 +854,6 @@ def verify_output_integrity(output_path: Path, min_size_mb: float = 1.0, verbose
                 print(f"Failed: Verification failed: File too small ({file_size_mb:.2f}MB < {min_size_mb}MB): {output_path}")
             return False
         
-        # Test gzip integrity
         if output_path.suffix == '.gz':
             try:
                 if verbose:
@@ -1426,7 +1353,10 @@ class FileCorruptionError(Exception):
     pass
 
 def validate_input_file(file_path: Path) -> dict:
-    """Validate input file before processing"""
+    """Validate input file before processing
+    
+    Note: This file validation implementation was assisted by AI.
+    """
     validation = {
         'valid': False,
         'error_type': None,
